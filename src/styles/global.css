@@ -1,0 +1,56 @@
+/* Global styles for DeskChan */
+
+/* Ensure full-screen transparent overlay */
+html, body, #root {
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    /* no background — transparent overlay on the desktop */
+}
+
+/* Prevent text selection during drag operations */
+.deskchan-no-select {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Smooth transitions for theme switching */
+html {
+    color-scheme: light;
+    transition: color-scheme 0.2s;
+}
+html.dark {
+    color-scheme: dark;
+}
+
+/* Scrollbar styling for cells */
+.cell-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+.cell-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.cell-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(128, 128, 128, 0.4);
+    border-radius: 2px;
+}
+
+/* Drag ghost — hide the default browser drag image */
+.drag-ghost {
+    position: absolute;
+    pointer-events: none;
+    opacity: 0.7;
+    z-index: 9999;
+}
+
+/* Context menu animation */
+@keyframes context-fade-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+.context-menu-enter {
+    animation: context-fade-in 0.12s ease-out;
+}
