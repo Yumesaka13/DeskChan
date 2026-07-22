@@ -165,6 +165,21 @@ pub fn init(window: &WebviewWindow) {
 
     // Start interactive — cursor polling will toggle click-through later
     let _ = window.set_ignore_cursor_events(false);
+
+    // Hide native desktop icons — our overlay replaces them entirely
+    hide_desktop_icons();
+}
+
+/// Hide the desktop's SysListView32 so our overlay is the only visible desktop.
+#[cfg(target_os = "windows")]
+fn hide_desktop_icons() {
+    extern "system" {
+        fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+    }
+    if let Some(list_view) = find_desktop_listview() {
+        const SW_HIDE: i32 = 0;
+        unsafe { ShowWindow(list_view, SW_HIDE) };
+    }
 }
 
 /// Show the desktop's SysListView32 — restore native desktop icons.

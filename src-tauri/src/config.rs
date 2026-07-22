@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A desktop shortcut icon within a cell.
+/// Files always stay in the desktop folder; we just track their paths.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[derive(ts_rs::TS)]
 #[ts(export, export_to = "../bindings/")]
@@ -9,11 +10,8 @@ pub struct DesktopIcon {
     pub id: String,
     /// Display name
     pub name: String,
-    /// Absolute path to the target file (in managed storage if moved)
+    /// Absolute path to the target file / executable (on the actual desktop)
     pub path: String,
-    /// Original path on desktop before move (empty if never moved)
-    #[serde(default)]
-    pub original_path: String,
     /// Optional custom icon path; falls back to system icon if absent
     pub icon_path: Option<String>,
 }

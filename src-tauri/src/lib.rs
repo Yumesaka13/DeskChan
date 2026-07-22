@@ -5,8 +5,39 @@ use tauri::Manager;
 
 mod bindings;
 mod config;
-mod file_manager;
 mod window_manager;
+
+fn desktop_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            return std::path::PathBuf::from(profile).join("Desktop");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join("Desktop");
+    }
+    std::path::PathBuf::from(".")
+}
+
+/// Scan the desktop folder for files/folders to populate initial config.
+fn scan_desktop() -> Vec<config::DesktopIcon> {
+    let mut icons = Vec::new();
+    let Ok(entries) = std::fs::read_dir(desktop_dir()) else { return icons };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
+        if name.starts_with('.') || name.eq_ignore_ascii_case("desktop.ini") { continue }
+        let display = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_string();
+        icons.push(config::DesktopIcon {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: display,
+            path: path.to_string_lossy().to_string(),
+            icon_path: None,
+        });
+    }
+    icons
+}
 
 pub fn run() {
     tauri::Builder::default()
@@ -19,10 +50,16 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
 
-            // Create default config if missing
+            // Create default config if missing — populate from actual desktop files
             let config_path = data_dir.join("deskchan.toml");
             if !config_path.exists() {
-                config::save_config(&config_path, &config::DeskConfig::default())
+                let mut cfg = config::DeskConfig::default();
+                let icons = scan_desktop();
+                if !icons.is_empty() {
+                    cfg.cells[0].title = "Desktop".to_string();
+                    cfg.cells[0].icons = icons;
+                }
+                config::save_config(&config_path, &cfg)
                     .expect("failed to write default config");
             }
 
@@ -48,9 +85,7 @@ pub fn run() {
             bindings::open_file,
             bindings::update_cell_regions,
             bindings::get_file_icon,
-            bindings::move_icon_to_cell,
-            bindings::restore_icon,
-            bindings::restore_and_quit,
+            bindings::quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

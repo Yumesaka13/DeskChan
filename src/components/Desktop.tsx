@@ -1,5 +1,5 @@
 /**
- * Desktop — main application surface.
+ * Desktop �?main application surface.
  * Manages cells, drag-and-drop, right-click menu, config persistence,
  * and reports cell regions to Rust for click-through cursor polling.
  */
@@ -78,14 +78,15 @@ export default function Desktop() {
             p ? { ...p, cells: p.cells.map((c) => (c.id === id ? fn(c) : c)) } : p,
         );
 
-    /** Move a file into managed storage and add its icon to the cell. */
-    const moveIconToCell = async (cellId: string, filePath: string) => {
-        try {
-            const result = await invoke<DIcon>('move_icon_to_cell', { path: filePath, cellId });
-            updateCell(cellId, (c) => ({ ...c, icons: [...c.icons, result] }));
-        } catch (e) {
-            toast.error(`Failed to move: ${e}`);
-        }
+    /** Create an icon entry and add it to a cell (no file movement �?just config). */
+    const addIconToCell = (cellId: string, filePath: string) => {
+        const icon: DIcon = {
+            id: crypto.randomUUID(),
+            name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? 'Unknown',
+            path: filePath,
+            icon_path: null,
+        };
+        updateCell(cellId, (c) => ({ ...c, icons: [...c.icons, icon] }));
     };
 
     /** Find which cell (if any) is at the given coordinates. */
@@ -115,9 +116,9 @@ export default function Desktop() {
             const file = files[i] as File & { path?: string };
             const filePath = file.path ?? file.name;
             if (targetCell) {
-                moveIconToCell(targetCell, filePath);
+                addIconToCell(targetCell, filePath);
             } else {
-                // Drop outside any cell → create a new cell and move file into it
+                // Drop outside any cell �?create a new cell and move file into it
                 const cellId = crypto.randomUUID();
                 const newCell: Cell = {
                     id: cellId,
@@ -129,7 +130,7 @@ export default function Desktop() {
                     icons: [],
                 };
                 setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
-                moveIconToCell(cellId, filePath);
+                addIconToCell(cellId, filePath);
             }
         }
     };
@@ -151,7 +152,7 @@ export default function Desktop() {
                 const targetCell = cellAtPoint(cssX, cssY);
                 for (const filePath of p.paths) {
                     if (targetCell) {
-                        moveIconToCell(targetCell, filePath);
+                        addIconToCell(targetCell, filePath);
                     } else {
                         const cellId = crypto.randomUUID();
                         const newCell: Cell = {
@@ -164,7 +165,7 @@ export default function Desktop() {
                             icons: [],
                         };
                         setConfig((p2) => (p2 ? { ...p2, cells: [...p2.cells, newCell] } : p2));
-                        moveIconToCell(cellId, filePath);
+                        addIconToCell(cellId, filePath);
                     }
                 }
             });
@@ -199,7 +200,7 @@ export default function Desktop() {
             const arr = Array.isArray(selected) ? selected : [selected];
             const paths = arr.map((p) => (typeof p === 'string' ? p : (p as { path: string }).path));
             for (const p of paths) {
-                moveIconToCell(cellId, p);
+                addIconToCell(cellId, p);
             }
         } catch {
             // user cancelled or dialog error
@@ -217,7 +218,7 @@ export default function Desktop() {
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDomDrop}
         >
-            {/* Cells — <For> with key prevents destroying/recreating components on config change */}
+            {/* Cells �?<For> with key prevents destroying/recreating components on config change */}
             <For each={config()?.cells ?? []}>
                 {(cell) => (
                     <CellBox
@@ -235,15 +236,10 @@ export default function Desktop() {
                                 toast.error('Failed to open file');
                             }
                         }}
-                        onRemoveIcon={(cid, iid) => {
-                            const cfg = config();
-                            const icon = cfg?.cells.find(c => c.id === cid)?.icons.find(i => i.id === iid);
-                            if (icon?.original_path) {
-                                invoke('restore_icon', { path: icon.path, originalPath: icon.original_path }).catch(() => {});
-                            }
-                            updateCell(cid, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== iid) }));
-                        }}
-                        onDropIcons={(cid, paths) => paths.forEach(p => moveIconToCell(cid, p))}
+                        onRemoveIcon={(cid, iid) =>
+                            updateCell(cid, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== iid) }))
+                        }
+                        onDropIcons={(cid, paths) => paths.forEach(p => addIconToCell(cid, p))}
                         onDelete={(id) =>
                             setConfig((p) =>
                                 p ? { ...p, cells: p.cells.filter((c) => c.id !== id) } : p,
@@ -251,7 +247,7 @@ export default function Desktop() {
                         }
                         onAddIcons={addIconsViaDialog}
                         onNewCell={createNewCell}
-                        onExit={() => invoke('restore_and_quit').catch(() => {})}
+                        onExit={() => invoke('quit_app').catch(() => {})}
                     />
                 )}
             </For>
@@ -295,7 +291,7 @@ export default function Desktop() {
                             icon: <FiPower />,
                             destructive: true,
                             onClick: () => {
-                                invoke('restore_and_quit').catch(() => {});
+                                invoke('quit_app').catch(() => {});
                             },
                         },
                     ]}
