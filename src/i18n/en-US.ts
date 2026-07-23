@@ -22,6 +22,9 @@ export const enUS: Translations = {
     'desktop.context.refresh': 'Refresh',
     'desktop.context.settings': 'Settings',
     'desktop.context.organize': 'Auto-Organize',
+    'desktop.context.arrangement': 'Arrangement',
+    'desktop.context.arrange_auto': 'Auto-Arrange',
+    'desktop.context.arrange_snap': 'Snap to Grid',
     'desktop.context.reset': 'Reset Config',
     'desktop.context.exit': 'Exit DeskChan',
 

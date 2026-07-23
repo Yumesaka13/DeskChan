@@ -14,6 +14,12 @@ pub struct DesktopIcon {
     pub path: String,
     /// Optional custom icon path; falls back to system icon if absent
     pub icon_path: Option<String>,
+    /// X position in free arrangement mode (0 = auto-grid)
+    #[serde(default)]
+    pub pos_x: f64,
+    /// Y position in free arrangement mode (0 = auto-grid)
+    #[serde(default)]
+    pub pos_y: f64,
 }
 
 /// Layout mode for icons within a cell.
@@ -70,6 +76,12 @@ pub struct DeskConfig {
     /// Free-floating icons (not in any cell), arranged in a grid on the desktop
     #[serde(default)]
     pub free_icons: Vec<DesktopIcon>,
+    /// Auto-arrange free icons in a grid (true) or allow free placement (false)
+    #[serde(default)]
+    pub auto_arrange: bool,
+    /// Snap free icons to grid positions when dragged
+    #[serde(default)]
+    pub snap_to_grid: bool,
     /// Whether to show cell titles
     pub show_titles: bool,
     /// Theme: "light", "dark", "auto"
@@ -82,6 +94,8 @@ impl Default for DeskConfig {
             version: 3,
             cells: Vec::new(),
             free_icons: Vec::new(),
+            auto_arrange: true,
+            snap_to_grid: true,
             show_titles: true,
             theme: "auto".to_string(),
         }

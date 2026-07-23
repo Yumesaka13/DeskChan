@@ -37,8 +37,7 @@ fn scan_desktop_categorized() -> (Vec<config::DesktopIcon>, Vec<config::DesktopI
             id: uuid::Uuid::new_v4().to_string(),
             name: display,
             path: path.to_string_lossy().to_string(),
-            icon_path: None,
-        };
+            icon_path: None,            pos_x: 0.0, pos_y: 0.0,        };
         if path.is_dir() {
             folders.push(icon);
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -115,6 +114,9 @@ pub fn run() {
             bindings::quit_app,
             bindings::reset_config,
             bindings::organize_icons,
+            bindings::refresh_desktop,
+            bindings::set_arrangement,
+            bindings::copy_to_desktop,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

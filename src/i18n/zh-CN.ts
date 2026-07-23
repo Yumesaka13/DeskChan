@@ -25,6 +25,9 @@ export interface Translations {
     'desktop.context.refresh': string;
     'desktop.context.settings': string;
     'desktop.context.organize': string;
+    'desktop.context.arrangement': string;
+    'desktop.context.arrange_auto': string;
+    'desktop.context.arrange_snap': string;
     'desktop.context.reset': string;
     'desktop.context.exit': string;
 
@@ -74,6 +77,9 @@ export const zhCN: Translations = {
     'desktop.context.refresh': '刷新',
     'desktop.context.settings': '设置',
     'desktop.context.organize': '一键整理',
+    'desktop.context.arrangement': '排列方式',
+    'desktop.context.arrange_auto': '自动排列',
+    'desktop.context.arrange_snap': '对齐到网格',
     'desktop.context.reset': '重置配置',
     'desktop.context.exit': '退出 DeskChan',
 

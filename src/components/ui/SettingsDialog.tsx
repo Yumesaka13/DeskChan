@@ -1,7 +1,7 @@
 /**
  * SettingsDialog — a modal dialog for app settings (theme, language, etc.).
  */
-import { createSignal } from 'solid-js';
+import { createSignal, Show } from 'solid-js';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { useTheme } from '~/lib/theme';
@@ -30,14 +30,13 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     const { theme, setTheme, resolvedTheme } = useTheme();
     const [showTitles, setShowTitles] = createSignal(props.showTitles);
 
-    if (!props.open) return null;
-
     const handleSave = () => {
         props.onSave({ showTitles: showTitles() });
         props.onClose();
     };
 
     return (
+        <Show when={props.open}>
         <div
             class={cn(
                 'fixed inset-0 z-50 flex items-center justify-center',
@@ -162,6 +161,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                     </button>
                 </div>
             </div>
-        </div>
+            </div>
+        </Show>
     );
 }

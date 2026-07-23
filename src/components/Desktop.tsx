@@ -81,11 +81,19 @@ export default function Desktop() {
             });
         };
 
+        const snapPos = (x: number, y: number) => {
+            // Grid cell: ~80px wide, ~90px tall (icon + gap)
+            const cx = Math.round(x / 80) * 80;
+            const cy = Math.round(y / 90) * 90;
+            return { pos_x: Math.max(0, cx), pos_y: Math.max(0, cy) };
+        };
+
         const onEnd = () => {
             if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
             const ds = dragState();
             if (!ds) return;
             const targetCell = cellAtPoint(ds.x, ds.y);
+            const snap = (x: number, y: number) => (config()?.snap_to_grid ? snapPos(x, y) : { pos_x: x, pos_y: y });
 
             if (targetCell && targetCell !== ds.cellId) {
                 setConfig((p) => p ? {
@@ -101,7 +109,14 @@ export default function Desktop() {
                 setConfig((p) => p ? {
                     ...p,
                     cells: p.cells.map((c) => c.id === ds.cellId ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) } : c),
-                    free_icons: [...p.free_icons, ds.icon],
+                    free_icons: [...p.free_icons, { ...ds.icon, ...snap(ds.x - ds.offsetX, ds.y - ds.offsetY) }],
+                } : p);
+            } else if (!targetCell && ds.source === 'free') {
+                setConfig((p) => p ? {
+                    ...p,
+                    free_icons: p.free_icons.map((i) => i.id === ds.iconId
+                        ? { ...i, ...snap(ds.x - ds.offsetX, ds.y - ds.offsetY) }
+                        : i),
                 } : p);
             }
             clearDrag();
@@ -147,6 +162,7 @@ export default function Desktop() {
             name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? t('default.icon_name'),
             path: filePath,
             icon_path: null,
+            pos_x: 0, pos_y: 0,
         };
         updateCell(cellId, (c) => ({ ...c, icons: [...c.icons, icon] }));
     };
@@ -205,32 +221,43 @@ export default function Desktop() {
         );
     };
 
-    // ── External file drops (from Explorer via HTML5 drag) ───────────────
+    // ── External file drops (from Explorer) ──────────────────────────────
+    const addFreeIconAt = (filePath: string, x: number, y: number) => {
+        const icon: DIcon = {
+            id: crypto.randomUUID(),
+            name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? t('default.icon_name'),
+            path: filePath,
+            icon_path: null,
+            pos_x: x, pos_y: y,
+        };
+        setConfig((p) => p ? { ...p, free_icons: [...p.free_icons, icon] } : p);
+    };
+
     const handleDomDrop = (e: DragEvent) => {
         e.preventDefault();
         const files = e.dataTransfer?.files;
         if (!files?.length) return;
-
         const targetCell = cellAtPoint(e.clientX, e.clientY);
-
         for (let i = 0; i < files.length; i++) {
             const file = files[i] as File & { path?: string };
             const filePath = file.path ?? file.name;
             if (targetCell) {
                 addIconToCell(targetCell, filePath);
             } else {
-                const cellId = crypto.randomUUID();
-                const newCell: Cell = {
-                    id: cellId,
-                    title: filePath.split(/[\\/]/).pop() ?? 'Cell',
-                    rect: { x: e.clientX - 160, y: e.clientY - 120, width: 320, height: 240 },
-                    background_color: null,
-                    opacity: 0.85,
-                    layout: 'Grid',
-                    icons: [],
-                };
-                setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
-                addIconToCell(cellId, filePath);
+                // Drop on desktop → copy to desktop folder, add as free icon at drop position
+                invoke<string>('copy_to_desktop', { path: filePath }).then((newPath) => {
+                    const snapHere = (x: number, y: number) => {
+                        const cfg = config();
+                        if (cfg?.snap_to_grid) {
+                            const cx = Math.round(x / 80) * 80;
+                            const cy = Math.round(y / 90) * 90;
+                            return { pos_x: Math.max(0, cx), pos_y: Math.max(0, cy) };
+                        }
+                        return { pos_x: x, pos_y: y };
+                    };
+                    const p = snapHere(e.clientX - 40, e.clientY - 40);
+                    addFreeIconAt(newPath, p.pos_x, p.pos_y);
+                }).catch(() => {});
             }
         }
     };
@@ -254,18 +281,17 @@ export default function Desktop() {
                     if (targetCell) {
                         addIconToCell(targetCell, filePath);
                     } else {
-                        const cellId = crypto.randomUUID();
-                        const newCell: Cell = {
-                            id: cellId,
-                            title: filePath.split(/[\\/]/).pop() ?? t('default.cell_title'),
-                            rect: { x: cssX - 160, y: cssY - 120, width: 320, height: 240 },
-                            background_color: null,
-                            opacity: 0.85,
-                            layout: 'Grid',
-                            icons: [],
-                        };
-                        setConfig((p2) => (p2 ? { ...p2, cells: [...p2.cells, newCell] } : p2));
-                        addIconToCell(cellId, filePath);
+                        // Tauri native drop on desktop → copy to desktop, add as free icon
+                        invoke<string>('copy_to_desktop', { path: filePath }).then((newPath) => {
+                            const posSnap = (x: number, y: number) => {
+                                const cfg = config();
+                                return cfg?.snap_to_grid
+                                    ? { pos_x: Math.max(0, Math.round(x / 80) * 80), pos_y: Math.max(0, Math.round(y / 90) * 90) }
+                                    : { pos_x: x, pos_y: y };
+                            };
+                            const p = posSnap(cssX - 40, cssY - 40);
+                            addFreeIconAt(newPath, p.pos_x, p.pos_y);
+                        }).catch(() => {});
                     }
                 }
             });
@@ -385,16 +411,17 @@ export default function Desktop() {
                 )}
             </For>
 
-            {/* Free-floating icons (desktop grid, top-to-bottom like Windows) */}
-            <div class="absolute top-2 left-2 flex flex-col flex-wrap content-start gap-1" style="max-height: calc(100vh - 20px); max-width: calc(100vw - 20px);">
+            {/* Free-floating icons — auto-grid or free absolute positions */}
+            {!config()?.auto_arrange ? (
                 <For each={config()?.free_icons ?? []}>
                     {(icon) => (
-                        <div data-icon>
+                        <div data-icon class="absolute" style={{
+                            left: `${icon.pos_x}px`,
+                            top: `${icon.pos_y}px`,
+                        }}>
                             <DesktopIconComponent
                                 icon={icon}
-                                onOpen={async (ic) => {
-                                    try { await invoke('open_file', { path: ic.path }); } catch { toast.error(t('toast.open_file_failed')); }
-                                }}
+                                onOpen={async (ic) => { try { await invoke('open_file', { path: ic.path }); } catch { toast.error(t('toast.open_file_failed')); } }}
                                 onRemove={(ic) => setConfig((p) => p ? { ...p, free_icons: p.free_icons.filter((i) => i.id !== ic.id) } : p)}
                                 onDragStart={(iconId, e) => {
                                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -405,7 +432,26 @@ export default function Desktop() {
                         </div>
                     )}
                 </For>
-            </div>
+            ) : (
+                <div class="absolute top-2 left-2 flex flex-col flex-wrap content-start gap-1" style="max-height: calc(100vh - 20px); max-width: calc(100vw - 20px);">
+                    <For each={config()?.free_icons ?? []}>
+                        {(icon) => (
+                            <div data-icon>
+                                <DesktopIconComponent
+                                    icon={icon}
+                                    onOpen={async (ic) => { try { await invoke('open_file', { path: ic.path }); } catch { toast.error(t('toast.open_file_failed')); } }}
+                                    onRemove={(ic) => setConfig((p) => p ? { ...p, free_icons: p.free_icons.filter((i) => i.id !== ic.id) } : p)}
+                                    onDragStart={(iconId, e) => {
+                                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                        setDragState({ iconId, source: 'free', cellId: '', icon, x: e.clientX, y: e.clientY, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
+                                        invoke('set_dragging', { dragging: true }).catch(() => {});
+                                    }}
+                                />
+                            </div>
+                        )}
+                    </For>
+                </div>
+            )}
 
             {/* Empty state */}
             {config() && config()!.cells.length === 0 && (
@@ -430,11 +476,32 @@ export default function Desktop() {
                             icon: <FiRefreshCw />,
                             onClick: async () => {
                                 try {
-                                    setConfig(await invoke<DeskConfig>('get_config'));
+                                    const newIcons = await invoke<DIcon[]>('refresh_desktop');
+                                    if (newIcons.length > 0) {
+                                        setConfig((p) => p ? { ...p, free_icons: [...p.free_icons, ...newIcons] } : p);
+                                    }
                                 } catch {
                                     /* ignore */
                                 }
                             },
+                        },
+                        {
+                            label: t('desktop.context.arrangement'),
+                            icon: <FiGrid />,
+                            submenu: [
+                                {
+                                    label: `${config()?.auto_arrange ? '☑ ' : '☐ '}${t('desktop.context.arrange_auto')}`,
+                                    onClick: () => {
+                                        setConfig((p) => p ? { ...p, auto_arrange: !p.auto_arrange } : p);
+                                    },
+                                },
+                                {
+                                    label: `${config()?.snap_to_grid ? '☑ ' : '☐ '}${t('desktop.context.arrange_snap')}`,
+                                    onClick: () => {
+                                        setConfig((p) => p ? { ...p, snap_to_grid: !p.snap_to_grid } : p);
+                                    },
+                                },
+                            ],
                         },
                         {
                             label: t('desktop.context.settings'),
