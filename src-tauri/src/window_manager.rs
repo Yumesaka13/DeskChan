@@ -14,29 +14,24 @@
 //! shows it on quit. Files never leave the desktop — we just hide the icons
 //! and render our own overlay.
 
-use crate::config::CellRect;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
 // ── Shared state ───────────────────────────────────────────────────────────
 
 pub struct DeskState {
-    pub regions: Mutex<Vec<CellRect>>,
     pub running: AtomicBool,
-    pub ignoring: AtomicBool,
-    /// Set by JS when pointer-event drag is active — polling must NOT enable click-through.
+    /// Set by JS when pointer-event drag is active — prevents any window state changes.
     pub dragging: AtomicBool,
 }
 
 impl DeskState {
     pub fn new() -> Self {
         Self {
-            regions: Mutex::new(Vec::new()),
             running: AtomicBool::new(true),
-            ignoring: AtomicBool::new(false),
             dragging: AtomicBool::new(false),
         }
     }
@@ -364,14 +359,7 @@ pub fn start_background_threads(app: tauri::AppHandle, state: Arc<DeskState>) {
 fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
     use constants::SWP_NOSIZE_NOMOVE_NOACTIVATE;
 
-    // Internal FFI declarations
-    #[repr(C)]
-    struct Point {
-        x: i32,
-        y: i32,
-    }
     extern "system" {
-        fn GetCursorPos(p: *mut Point) -> i32;
         fn GetForegroundWindow() -> isize;
         fn GetClassNameW(h: isize, b: *mut u16, m: i32) -> i32;
         fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32) -> i32;
@@ -391,7 +379,7 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
             _ => 0,
         };
 
-        // ── Z-order counter-attack ──────────────────────────────────────
+        // ── Z-order counter-attack (only) ─────────────────────────────
         // Win+D brings the desktop wallpaper (WorkerW/Progman) to the top
         // of the Z-order, physically covering our window. Detect when the
         // desktop is the foreground window and push it behind us.
@@ -408,39 +396,7 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
                 }
             }
         }
-
-        // ── Cursor polling (click-through toggle) ───────────────────────
-        let mut pt = Point { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut pt) };
-
-        let Ok(window_pos) = window.outer_position() else {
-            continue;
-        };
-        let Ok(scale_factor) = window.scale_factor() else {
-            continue;
-        };
-
-        // Convert screen physical pixels → window-relative logical pixels
-        let logical_x = (pt.x - window_pos.x as i32) as f64 / scale_factor;
-        let logical_y = (pt.y - window_pos.y as i32) as f64 / scale_factor;
-
-        let regions = state.regions.lock().unwrap();
-        if regions.is_empty() {
-            continue;
-        }
-
-        let over_cell = regions.iter().any(|r| {
-            logical_x >= r.x
-                && logical_x <= r.x + r.width
-                && logical_y >= r.y
-                && logical_y <= r.y + r.height
-        });
-
-        let should_ignore = !over_cell && !state.dragging.load(Ordering::Relaxed);
-        if should_ignore != state.ignoring.load(Ordering::Relaxed) {
-            let _ = window.set_ignore_cursor_events(should_ignore);
-            state.ignoring.store(should_ignore, Ordering::Relaxed);
-        }
+        // No cursor polling — we fully take over the desktop, always interactive.
     }
 }
 

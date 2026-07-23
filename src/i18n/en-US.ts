@@ -11,6 +11,8 @@ export const enUS: Translations = {
     'cell.context.add_icon': 'Add Icon',
     'cell.context.settings': 'Cell Settings',
     'cell.context.delete_cell': 'Delete Cell',
+    'cell.collapse': 'Collapse',
+    'cell.expand': 'Expand',
 
     'icon.remove': 'Remove Icon',
     'icon.open_file': 'Open File',
@@ -19,8 +21,17 @@ export const enUS: Translations = {
     'desktop.context.new_cell': 'New Cell',
     'desktop.context.refresh': 'Refresh',
     'desktop.context.settings': 'Settings',
+    'desktop.context.organize': 'Auto-Organize',
     'desktop.context.reset': 'Reset Config',
     'desktop.context.exit': 'Exit DeskChan',
+
+    'toast.load_config_failed': 'Failed to load configuration',
+    'toast.open_file_failed': 'Failed to open file',
+    'toast.organize_failed': 'Failed to organize',
+
+    'default.cell_title': 'Cell',
+    'default.icon_name': 'Unknown',
+    'default.add_files_title': 'Select files to add',
 
     'settings.theme': 'Theme',
     'settings.language': 'Language',

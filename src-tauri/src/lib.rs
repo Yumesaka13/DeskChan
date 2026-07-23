@@ -42,27 +42,12 @@ fn scan_desktop_categorized() -> (Vec<config::DesktopIcon>, Vec<config::DesktopI
         if path.is_dir() {
             folders.push(icon);
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            match ext.to_lowercase().as_str() {
-                "exe" | "lnk" | "bat" | "cmd" | "msc" => apps.push(icon),
-                _ => files.push(icon),
-            }
+            if config::is_app_extension(ext) { apps.push(icon); } else { files.push(icon); }
         } else {
             files.push(icon); // no extension → general file
         }
     }
     (folders, apps, files)
-}
-
-fn make_default_cell(title: &str, x: f64, y: f64, w: f64, h: f64, icons: Vec<config::DesktopIcon>) -> config::Cell {
-    config::Cell {
-        id: uuid::Uuid::new_v4().to_string(),
-        title: title.to_string(),
-        rect: config::CellRect { x, y, width: w, height: h },
-        background_color: None,
-        opacity: 0.85,
-        layout: config::CellLayout::Grid,
-        icons,
-    }
 }
 
 pub fn run() {
@@ -76,28 +61,33 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
 
-            // Create default config — categorize desktop files into cells
+            // Create default config — all desktop files as free-floating icons
             let config_path = data_dir.join("deskchan.toml");
             if !config_path.exists() {
                 let (folders, apps, files) = scan_desktop_categorized();
-                let mut cells = Vec::new();
-                if !folders.is_empty() {
-                    cells.push(make_default_cell("Folders", 50.0, 50.0, 320.0, 280.0, folders));
-                }
-                if !apps.is_empty() {
-                    let x = if cells.is_empty() { 50.0 } else { 420.0 };
-                    cells.push(make_default_cell("Applications", x, 50.0, 320.0, 280.0, apps));
-                }
-                if !files.is_empty() {
-                    let x = if cells.len() < 2 { 50.0 + (cells.len() as f64) * 370.0 } else { 790.0 };
-                    cells.push(make_default_cell("Files", x, 50.0, 320.0, 280.0, files));
-                }
+                let mut free_icons = Vec::new();
+                free_icons.extend(folders);
+                free_icons.extend(apps);
+                free_icons.extend(files);
                 let cfg = config::DeskConfig {
-                    cells,
+                    free_icons,
                     ..config::DeskConfig::default()
                 };
                 config::save_config(&config_path, &cfg)
                     .expect("failed to write default config");
+            } else {
+                // Migrate old configs (v2 → v3): move cell icons to free_icons
+                let mut cfg = config::load_config(&config_path)
+                    .expect("failed to load config");
+                if cfg.version < 3 {
+                    for cell in &mut cfg.cells {
+                        cfg.free_icons.append(&mut cell.icons);
+                    }
+                    cfg.cells.clear();
+                    cfg.version = 3;
+                    config::save_config(&config_path, &cfg)
+                        .expect("failed to save migrated config");
+                }
             }
 
             // Desktop window initialization (Windows-only: AppBar + WndProc + styles)
@@ -120,11 +110,11 @@ pub fn run() {
             bindings::get_config,
             bindings::save_config,
             bindings::open_file,
-            bindings::update_cell_regions,
             bindings::set_dragging,
             bindings::get_file_icon,
             bindings::quit_app,
             bindings::reset_config,
+            bindings::organize_icons,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

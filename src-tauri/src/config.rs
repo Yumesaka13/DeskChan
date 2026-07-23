@@ -65,8 +65,11 @@ pub struct Cell {
 pub struct DeskConfig {
     /// Version for future migration
     pub version: u32,
-    /// All cells on the desktop
+    /// All fenced cells on the desktop
     pub cells: Vec<Cell>,
+    /// Free-floating icons (not in any cell), arranged in a grid on the desktop
+    #[serde(default)]
+    pub free_icons: Vec<DesktopIcon>,
     /// Whether to show cell titles
     pub show_titles: bool,
     /// Theme: "light", "dark", "auto"
@@ -76,23 +79,9 @@ pub struct DeskConfig {
 impl Default for DeskConfig {
     fn default() -> Self {
         Self {
-            version: 2,
-            cells: vec![
-                Cell {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    title: "Applications".to_string(),
-                    rect: CellRect {
-                        x: 50.0,
-                        y: 50.0,
-                        width: 320.0,
-                        height: 280.0,
-                    },
-                    background_color: None,
-                    opacity: 0.85,
-                    layout: CellLayout::Grid,
-                    icons: Vec::new(),
-                },
-            ],
+            version: 3,
+            cells: Vec::new(),
+            free_icons: Vec::new(),
             show_titles: true,
             theme: "auto".to_string(),
         }
@@ -114,4 +103,9 @@ pub fn save_config(
     let content = toml::to_string_pretty(cfg)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// Check whether a file extension belongs to an executable / application.
+pub fn is_app_extension(ext: &str) -> bool {
+    matches!(ext.to_lowercase().as_str(), "exe" | "lnk" | "bat" | "cmd" | "msc")
 }

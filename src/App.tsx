@@ -1,4 +1,3 @@
-import { type ParentProps, createSignal, createEffect } from 'solid-js';
 import { I18nProvider } from './i18n';
 import { ThemeProvider } from './lib/theme';
 import Desktop from './components/Desktop';

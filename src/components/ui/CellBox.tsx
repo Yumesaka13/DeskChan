@@ -233,7 +233,7 @@ export default function CellBox(props: CellBoxProps) {
                             'transition-transform duration-200',
                             collapsed() && 'rotate-180',
                         )}
-                        title={collapsed() ? 'Expand' : 'Collapse'}
+                        title={collapsed() ? t('cell.expand') : t('cell.collapse')}
                     >
                         <FiChevronUp class="w-3.5 h-3.5" />
                     </button>
@@ -318,5 +318,3 @@ export default function CellBox(props: CellBoxProps) {
         </>
     );
 }
-
-export type { Cell, DesktopIconData };

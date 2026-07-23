@@ -12,6 +12,8 @@ export interface Translations {
     'cell.context.add_icon': string;
     'cell.context.settings': string;
     'cell.context.delete_cell': string;
+    'cell.collapse': string;
+    'cell.expand': string;
 
     // Icon
     'icon.remove': string;
@@ -22,8 +24,19 @@ export interface Translations {
     'desktop.context.new_cell': string;
     'desktop.context.refresh': string;
     'desktop.context.settings': string;
+    'desktop.context.organize': string;
     'desktop.context.reset': string;
     'desktop.context.exit': string;
+
+    // Toast messages
+    'toast.load_config_failed': string;
+    'toast.open_file_failed': string;
+    'toast.organize_failed': string;
+
+    // Defaults
+    'default.cell_title': string;
+    'default.icon_name': string;
+    'default.add_files_title': string;
 
     // Settings
     'settings.theme': string;
@@ -50,6 +63,8 @@ export const zhCN: Translations = {
     'cell.context.add_icon': '添加图标',
     'cell.context.settings': '格子设置',
     'cell.context.delete_cell': '删除格子',
+    'cell.collapse': '折叠',
+    'cell.expand': '展开',
 
     'icon.remove': '移除图标',
     'icon.open_file': '打开文件',
@@ -58,8 +73,17 @@ export const zhCN: Translations = {
     'desktop.context.new_cell': '新建格子',
     'desktop.context.refresh': '刷新',
     'desktop.context.settings': '设置',
+    'desktop.context.organize': '一键整理',
     'desktop.context.reset': '重置配置',
     'desktop.context.exit': '退出 DeskChan',
+
+    'toast.load_config_failed': '加载配置失败',
+    'toast.open_file_failed': '打开文件失败',
+    'toast.organize_failed': '整理失败',
+
+    'default.cell_title': '格子',
+    'default.icon_name': '未知',
+    'default.add_files_title': '选择要添加的文件',
 
     'settings.theme': '主题',
     'settings.language': '语言',

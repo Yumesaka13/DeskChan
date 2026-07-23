@@ -65,7 +65,6 @@ export default function DesktopIcon(props: DesktopIconProps) {
             onPointerDown={(e) => {
                 if (props.onDragStart) {
                     e.preventDefault();
-                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
                     props.onDragStart(props.icon.id, e);
                 }
             }}

@@ -3,18 +3,18 @@
  * Manages cells, drag-and-drop, right-click menu, config persistence,
  * and reports cell regions to Rust for click-through cursor polling.
  */
-import { createSignal, onMount, onCleanup, createEffect, For } from 'solid-js';
+import { createSignal, onMount, onCleanup, createEffect, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useI18n } from '~/i18n';
 import type { DeskConfig } from '@bindings/DeskConfig';
 import type { Cell } from '@bindings/Cell';
-import type { CellRect } from '@bindings/CellRect';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import CellBox from './ui/CellBox';
+import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu, { type MenuItem } from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2, FiFile } from 'solid-icons/fi';
+import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2, FiFile, FiGrid } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 /** Shape of Tauri v2 drag-drop event payload. */
@@ -31,7 +31,7 @@ export default function Desktop() {
     const [settingsOpen, setSettingsOpen] = createSignal(false);
 
     // ── Pointer-event simulated drag state ───────────────────────────────
-    interface DragState { iconId: string; cellId: string; icon: DIcon; x: number; y: number; offsetX: number; offsetY: number; }
+    interface DragState { iconId: string; source: 'cell' | 'free'; cellId: string; icon: DIcon; x: number; y: number; offsetX: number; offsetY: number; }
     const [dragState, setDragState] = createSignal<DragState | null>(null);
 
     // ── Load config ──────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ export default function Desktop() {
         try {
             setConfig(await invoke<DeskConfig>('get_config'));
         } catch {
-            toast.error('Failed to load configuration');
+            toast.error(t('toast.load_config_failed'));
         }
     });
 
@@ -63,41 +63,62 @@ export default function Desktop() {
 
     // ── Global pointer-event drag tracking ──────────────────────────────
     onMount(() => {
-        const onMove = (e: PointerEvent) => {
-            setDragState((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
+        let dragTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const clearDrag = () => {
+            setDragState(null);
+            invoke('set_dragging', { dragging: false }).catch(() => {});
+            if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
         };
+
+        const onMove = (e: PointerEvent) => {
+            setDragState((prev) => {
+                if (!prev) return null;
+                // Reset timeout on each move — if no move for 2s, auto-cancel
+                if (dragTimer) clearTimeout(dragTimer);
+                dragTimer = setTimeout(clearDrag, 2000);
+                return { ...prev, x: e.clientX, y: e.clientY };
+            });
+        };
+
         const onEnd = () => {
+            if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
             const ds = dragState();
             if (!ds) return;
             const targetCell = cellAtPoint(ds.x, ds.y);
+
             if (targetCell && targetCell !== ds.cellId) {
-                moveIconToCell(ds.iconId, targetCell);
-            } else if (!targetCell) {
-                const newId = crypto.randomUUID();
                 setConfig((p) => p ? {
                     ...p,
-                    cells: p.cells.map((c) => c.id === ds.cellId
-                        ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) }
-                        : c
-                    ).concat({
-                        id: newId, title: ds.icon.name,
-                        rect: { x: ds.x - 80, y: ds.y - 60, width: 160, height: 120 },
-                        background_color: null, opacity: 0.85, layout: 'Grid' as const, icons: [ds.icon],
+                    free_icons: ds.source === 'free' ? p.free_icons.filter((i) => i.id !== ds.iconId) : p.free_icons,
+                    cells: p.cells.map((c) => {
+                        if (c.id === ds.cellId && ds.source === 'cell') return { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) };
+                        if (c.id === targetCell) return { ...c, icons: [...c.icons, ds.icon] };
+                        return c;
                     }),
                 } : p);
+            } else if (!targetCell && ds.source === 'cell') {
+                setConfig((p) => p ? {
+                    ...p,
+                    cells: p.cells.map((c) => c.id === ds.cellId ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) } : c),
+                    free_icons: [...p.free_icons, ds.icon],
+                } : p);
             }
-            setDragState(null);
-            invoke('set_dragging', { dragging: false }).catch(() => {});
+            clearDrag();
         };
+
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onEnd);
-        window.addEventListener('pointerleave', onEnd);  // cursor leaves window → cancel drag
-        window.addEventListener('pointercancel', onEnd); // OS cancels pointer → clean up
+        window.addEventListener('pointerleave', onEnd);
+        window.addEventListener('pointercancel', onEnd);
+        window.addEventListener('lostpointercapture', onEnd);
         onCleanup(() => {
+            clearDrag();
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onEnd);
             window.removeEventListener('pointerleave', onEnd);
             window.removeEventListener('pointercancel', onEnd);
+            window.removeEventListener('lostpointercapture', onEnd);
         });
     });
 
@@ -113,37 +134,6 @@ export default function Desktop() {
         onCleanup(() => clearTimeout(saveTimer!));
     });
 
-    // ── Report cell regions to Rust (for cursor polling) ─────────────────
-    const FULL_SCREEN: CellRect = { x: 0, y: 0, width: 99999, height: 99999 };
-
-    const reportRegions = () => {
-        // During simulated drag or context menu: disable click-through
-        if (dragState() || contextMenu()) {
-            invoke('update_cell_regions', { regions: [FULL_SCREEN] }).catch(() => {});
-            return;
-        }
-        const cfg = config();
-        if (!cfg) return;
-        const regions: CellRect[] = cfg.cells.map((c) => c.rect);
-        invoke('update_cell_regions', { regions }).catch(() => {});
-    };
-
-    let initialReportDone = false;
-    createEffect(() => {
-        const cfg = config();
-        // Force re-evaluation when drag or menu state changes
-        void dragState();
-        void contextMenu();
-        if (!cfg) return;
-        if (!initialReportDone) {
-            initialReportDone = true;
-            reportRegions();
-        } else {
-            const timer = setTimeout(reportRegions, 40);
-            onCleanup(() => clearTimeout(timer));
-        }
-    });
-
     // ── Cell operations ──────────────────────────────────────────────────
     const updateCell = (id: string, fn: (c: Cell) => Cell) =>
         setConfig((p) =>
@@ -154,7 +144,7 @@ export default function Desktop() {
     const addIconToCell = (cellId: string, filePath: string) => {
         const icon: DIcon = {
             id: crypto.randomUUID(),
-            name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? 'Unknown',
+            name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? t('default.icon_name'),
             path: filePath,
             icon_path: null,
         };
@@ -267,7 +257,7 @@ export default function Desktop() {
                         const cellId = crypto.randomUUID();
                         const newCell: Cell = {
                             id: cellId,
-                            title: filePath.split(/[\\/]/).pop() ?? 'Cell',
+                            title: filePath.split(/[\\/]/).pop() ?? t('default.cell_title'),
                             rect: { x: cssX - 160, y: cssY - 120, width: 320, height: 240 },
                             background_color: null,
                             opacity: 0.85,
@@ -288,7 +278,7 @@ export default function Desktop() {
     const createNewCell = () => {
         const newCell: Cell = {
             id: crypto.randomUUID(),
-            title: 'Cell',
+            title: t('default.cell_title'),
             rect: {
                 x: 200 + Math.random() * 200,
                 y: 200 + Math.random() * 200,
@@ -305,7 +295,7 @@ export default function Desktop() {
 
     const addIconsViaDialog = async (cellId: string) => {
         try {
-            const selected = await open({ multiple: true, title: 'Select files to add' });
+            const selected = await open({ multiple: true, title: t('default.add_files_title') });
             if (!selected) return;
             const arr = Array.isArray(selected) ? selected : [selected];
             const paths = arr.map((p) => (typeof p === 'string' ? p : (p as { path: string }).path));
@@ -365,7 +355,7 @@ export default function Desktop() {
                             try {
                                 await invoke('open_file', { path: ic.path });
                             } catch {
-                                toast.error('Failed to open file');
+                                toast.error(t('toast.open_file_failed'));
                             }
                         }}
                         onRemoveIcon={(cid, iid) =>
@@ -382,12 +372,11 @@ export default function Desktop() {
                         onDragStart={(iconId, cellId, icon, e) => {
                             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                             setDragState({
-                                iconId, cellId, icon,
+                                iconId, source: 'cell', cellId, icon,
                                 x: e.clientX, y: e.clientY,
                                 offsetX: e.clientX - rect.left,
                                 offsetY: e.clientY - rect.top,
                             });
-                            // Prevent Rust polling from enabling click-through during drag
                             invoke('set_dragging', { dragging: true }).catch(() => {});
                         }}
                         onNewCell={createNewCell}
@@ -395,6 +384,28 @@ export default function Desktop() {
                     />
                 )}
             </For>
+
+            {/* Free-floating icons (desktop grid, top-to-bottom like Windows) */}
+            <div class="absolute top-2 left-2 flex flex-col flex-wrap content-start gap-1" style="max-height: calc(100vh - 20px); max-width: calc(100vw - 20px);">
+                <For each={config()?.free_icons ?? []}>
+                    {(icon) => (
+                        <div data-icon>
+                            <DesktopIconComponent
+                                icon={icon}
+                                onOpen={async (ic) => {
+                                    try { await invoke('open_file', { path: ic.path }); } catch { toast.error(t('toast.open_file_failed')); }
+                                }}
+                                onRemove={(ic) => setConfig((p) => p ? { ...p, free_icons: p.free_icons.filter((i) => i.id !== ic.id) } : p)}
+                                onDragStart={(iconId, e) => {
+                                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                    setDragState({ iconId, source: 'free', cellId: '', icon, x: e.clientX, y: e.clientY, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
+                                    invoke('set_dragging', { dragging: true }).catch(() => {});
+                                }}
+                            />
+                        </div>
+                    )}
+                </For>
+            </div>
 
             {/* Empty state */}
             {config() && config()!.cells.length === 0 && (
@@ -431,6 +442,17 @@ export default function Desktop() {
                             onClick: () => setSettingsOpen(true),
                         },
                         {
+                            label: t('desktop.context.organize'),
+                            icon: <FiGrid />,
+                            onClick: async () => {
+                                try {
+                                    setConfig(await invoke<DeskConfig>('organize_icons'));
+                                } catch {
+                                    toast.error(t('toast.organize_failed'));
+                                }
+                            },
+                        },
+                        {
                             label: t('desktop.context.reset'),
                             icon: <FiTrash2 />,
                             destructive: true,
@@ -463,25 +485,27 @@ export default function Desktop() {
             />
 
             {/* Drag ghost — follows cursor during simulated drag */}
-            {dragState() && (
-                <div
-                    class="fixed z-[10000] pointer-events-none flex flex-col items-center gap-0.5 p-1.5 rounded-lg bg-white/80 dark:bg-gray-800/80 shadow-lg"
-                    style={{
-                        left: `${dragState()!.x - dragState()!.offsetX}px`,
-                        top: `${dragState()!.y - dragState()!.offsetY}px`,
-                        width: '72px',
-                    }}
-                >
-                    <div class="w-8 h-8 flex items-center justify-center">
-                        <FiFile class="text-lg text-gray-400 dark:text-gray-500" />
+            <Show when={dragState()}>
+                {(ds) => (
+                    <div
+                        class="fixed z-[10000] pointer-events-none flex flex-col items-center gap-0.5 p-1.5 rounded-lg bg-white/80 dark:bg-gray-800/80 shadow-lg"
+                        style={{
+                            left: `${ds().x - ds().offsetX}px`,
+                            top: `${ds().y - ds().offsetY}px`,
+                            width: '72px',
+                        }}
+                    >
+                        <div class="w-8 h-8 flex items-center justify-center">
+                            <FiFile class="text-lg text-gray-400 dark:text-gray-500" />
+                        </div>
+                        <span class="text-xs text-gray-700 dark:text-gray-200 truncate max-w-full">
+                            {ds().icon.name.length > 10
+                                ? ds().icon.name.slice(0, 9) + '\u2026'
+                                : ds().icon.name}
+                        </span>
                     </div>
-                    <span class="text-xs text-gray-700 dark:text-gray-200 truncate max-w-full">
-                        {dragState()!.icon.name.length > 10
-                            ? dragState()!.icon.name.slice(0, 9) + '\u2026'
-                            : dragState()!.icon.name}
-                    </span>
-                </div>
-            )}
+                )}
+            </Show>
         </div>
     );
 }
