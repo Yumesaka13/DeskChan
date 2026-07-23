@@ -476,13 +476,31 @@ export default function Desktop() {
                             icon: <FiRefreshCw />,
                             onClick: async () => {
                                 try {
-                                    const newIcons = await invoke<DIcon[]>('refresh_desktop');
+                                    const desktopPaths = await invoke<string[]>('scan_desktop_files');
+                                    // Collect paths from both free_icons AND cells to avoid re-adding
+                                    // icons already organized into cells.
+                                    const cfg = config();
+                                    const existingPaths = new Set([
+                                        ...(cfg?.free_icons.map((i) => i.path.toLowerCase()) ?? []),
+                                        ...(cfg?.cells.flatMap((c) => c.icons.map((i) => i.path.toLowerCase())) ?? []),
+                                    ]);
+                                    const newIcons: DIcon[] = [];
+                                    for (const p of desktopPaths) {
+                                        if (existingPaths.has(p.toLowerCase())) continue;
+                                        const filename = p.split(/[\\/]/).pop() ?? '';
+                                        if (filename.startsWith('.') || filename.toLowerCase() === 'desktop.ini') continue;
+                                        newIcons.push({
+                                            id: crypto.randomUUID(),
+                                            name: filename.replace(/\.[^.]+$/, ''),
+                                            path: p,
+                                            icon_path: null,
+                                            pos_x: 0, pos_y: 0,
+                                        });
+                                    }
                                     if (newIcons.length > 0) {
                                         setConfig((p) => p ? { ...p, free_icons: [...p.free_icons, ...newIcons] } : p);
                                     }
-                                } catch {
-                                    /* ignore */
-                                }
+                                } catch { /* ignore */ }
                             },
                         },
                         {

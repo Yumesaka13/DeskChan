@@ -90,41 +90,21 @@ pub fn organize_icons(app: tauri::AppHandle) -> Result<DeskConfig, String> {
     Ok(cfg)
 }
 
-/// Scan desktop for new files not yet in free_icons. Returns only the new icons.
-/// The caller (JS) merges them into the live config signal — no disk save or full-config return.
+/// Return all file paths currently on the desktop. JS compares with free_icons
+/// to add new ones — no config file I/O involved, avoiding save races.
 #[tauri::command]
-pub fn refresh_desktop(app: tauri::AppHandle) -> Result<Vec<config::DesktopIcon>, String> {
-    let cfg_path = config_path(&app);
-    let cfg: DeskConfig = config::load_config(&cfg_path).map_err(|e| e.to_string())?;
-
-    // Build a set of existing filenames (case-insensitive)
-    let existing_names: std::collections::HashSet<String> =
-        cfg.free_icons.iter().filter_map(|i| {
-            std::path::Path::new(&i.path).file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-        }).collect();
-
-    let mut new_icons = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(desktop_dir()) {
+pub fn scan_desktop_files() -> Result<Vec<String>, String> {
+    let desktop = desktop_dir();
+    let mut paths = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&desktop) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
-            if existing_names.contains(&name.to_lowercase()) { continue; }
-            if name.starts_with('.') || name.eq_ignore_ascii_case("desktop.ini") { continue; }
-            let display = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_string();
-            new_icons.push(config::DesktopIcon {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: display,
-                path: path.to_string_lossy().to_string(),
-                icon_path: None,
-                pos_x: 0.0, pos_y: 0.0,
-            });
+            if path.is_dir() || path.extension().is_some() {
+                paths.push(path.to_string_lossy().to_string());
+            }
         }
     }
-
-    Ok(new_icons)
+    Ok(paths)
 }
 
 /// Copy a file to the desktop folder and return its new path.

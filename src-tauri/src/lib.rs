@@ -114,7 +114,7 @@ pub fn run() {
             bindings::quit_app,
             bindings::reset_config,
             bindings::organize_icons,
-            bindings::refresh_desktop,
+            bindings::scan_desktop_files,
             bindings::set_arrangement,
             bindings::copy_to_desktop,
         ])
