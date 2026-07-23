@@ -1,5 +1,5 @@
 /**
- * Desktop �?main application surface.
+ * Desktop main application surface.
  * Manages cells, drag-and-drop, right-click menu, config persistence,
  * and reports cell regions to Rust for click-through cursor polling.
  */
