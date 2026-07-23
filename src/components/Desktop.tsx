@@ -14,7 +14,7 @@ import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import CellBox from './ui/CellBox';
 import ContextMenu, { type MenuItem } from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2 } from 'solid-icons/fi';
+import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2, FiFile } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 /** Shape of Tauri v2 drag-drop event payload. */
@@ -30,6 +30,10 @@ export default function Desktop() {
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [settingsOpen, setSettingsOpen] = createSignal(false);
 
+    // ── Pointer-event simulated drag state ───────────────────────────────
+    interface DragState { iconId: string; cellId: string; icon: DIcon; x: number; y: number; offsetX: number; offsetY: number; }
+    const [dragState, setDragState] = createSignal<DragState | null>(null);
+
     // ── Load config ──────────────────────────────────────────────────────
     onMount(async () => {
         try {
@@ -37,6 +41,64 @@ export default function Desktop() {
         } catch {
             toast.error('Failed to load configuration');
         }
+    });
+
+    // ── Keyboard shortcuts: context menu + cancel drag ───────────────────
+    onMount(() => {
+        const onKey = (e: KeyboardEvent) => {
+            // Shift+F10 or ContextMenu key → open menu (works when click-through active)
+            if ((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu') {
+                e.preventDefault();
+                setContextMenu({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+            }
+            // Escape → cancel drag / close menu
+            if (e.key === 'Escape') {
+                setDragState(null);
+                setContextMenu(null);
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        onCleanup(() => window.removeEventListener('keydown', onKey));
+    });
+
+    // ── Global pointer-event drag tracking ──────────────────────────────
+    onMount(() => {
+        const onMove = (e: PointerEvent) => {
+            setDragState((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
+        };
+        const onEnd = () => {
+            const ds = dragState();
+            if (!ds) return;
+            const targetCell = cellAtPoint(ds.x, ds.y);
+            if (targetCell && targetCell !== ds.cellId) {
+                moveIconToCell(ds.iconId, targetCell);
+            } else if (!targetCell) {
+                const newId = crypto.randomUUID();
+                setConfig((p) => p ? {
+                    ...p,
+                    cells: p.cells.map((c) => c.id === ds.cellId
+                        ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) }
+                        : c
+                    ).concat({
+                        id: newId, title: ds.icon.name,
+                        rect: { x: ds.x - 80, y: ds.y - 60, width: 160, height: 120 },
+                        background_color: null, opacity: 0.85, layout: 'Grid' as const, icons: [ds.icon],
+                    }),
+                } : p);
+            }
+            setDragState(null);
+            invoke('set_dragging', { dragging: false }).catch(() => {});
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onEnd);
+        window.addEventListener('pointerleave', onEnd);  // cursor leaves window → cancel drag
+        window.addEventListener('pointercancel', onEnd); // OS cancels pointer → clean up
+        onCleanup(() => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onEnd);
+            window.removeEventListener('pointerleave', onEnd);
+            window.removeEventListener('pointercancel', onEnd);
+        });
     });
 
     // ── Save config (debounced, not in frequent callbacks) ───────────────
@@ -52,7 +114,14 @@ export default function Desktop() {
     });
 
     // ── Report cell regions to Rust (for cursor polling) ─────────────────
+    const FULL_SCREEN: CellRect = { x: 0, y: 0, width: 99999, height: 99999 };
+
     const reportRegions = () => {
+        // During simulated drag or context menu: disable click-through
+        if (dragState() || contextMenu()) {
+            invoke('update_cell_regions', { regions: [FULL_SCREEN] }).catch(() => {});
+            return;
+        }
         const cfg = config();
         if (!cfg) return;
         const regions: CellRect[] = cfg.cells.map((c) => c.rect);
@@ -62,6 +131,9 @@ export default function Desktop() {
     let initialReportDone = false;
     createEffect(() => {
         const cfg = config();
+        // Force re-evaluation when drag or menu state changes
+        void dragState();
+        void contextMenu();
         if (!cfg) return;
         if (!initialReportDone) {
             initialReportDone = true;
@@ -143,34 +215,9 @@ export default function Desktop() {
         );
     };
 
-    // ── DOM drag-and-drop (file drops + icon moves) ──────────────────────
+    // ── External file drops (from Explorer via HTML5 drag) ───────────────
     const handleDomDrop = (e: DragEvent) => {
         e.preventDefault();
-
-        // Internal icon move — dropped on desktop background (outside any cell)
-        const iconId = e.dataTransfer?.getData('application/deskchan-icon')
-            || e.dataTransfer?.getData('text/plain');
-        if (iconId) {
-            const found = findIconCell(iconId);
-            if (found) {
-                // Move icon out of its cell into a new standalone cell
-                const cellId = crypto.randomUUID();
-                const newCell: Cell = {
-                    id: cellId,
-                    title: found.icon.name,
-                    rect: { x: e.clientX - 80, y: e.clientY - 60, width: 160, height: 120 },
-                    background_color: null,
-                    opacity: 0.85,
-                    layout: 'Grid',
-                    icons: [],
-                };
-                setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
-                moveIconToCell(iconId, cellId);
-            }
-            return;
-        }
-
-        // External file drops
         const files = e.dataTransfer?.files;
         if (!files?.length) return;
 
@@ -271,15 +318,37 @@ export default function Desktop() {
     };
 
     // ── Render ───────────────────────────────────────────────────────────
+    let desktopRef!: HTMLDivElement;
+
+    // Native drag listeners on window level — capture phase forces allow
+    onMount(() => {
+        const allow = (e: Event) => {
+            e.preventDefault();
+            const dt = (e as DragEvent).dataTransfer;
+            if (dt) dt.dropEffect = 'move';
+        };
+        // capture:true ensures we intercept BEFORE any child (CellBox) ignores the event
+        window.addEventListener('dragenter', allow, { capture: true });
+        window.addEventListener('dragover', allow, { capture: true });
+        window.addEventListener('drop', handleDomDrop as unknown as EventListener, { capture: true });
+        onCleanup(() => {
+            window.removeEventListener('dragenter', allow, { capture: true });
+            window.removeEventListener('dragover', allow, { capture: true });
+            window.removeEventListener('drop', handleDomDrop as unknown as EventListener, { capture: true });
+        });
+    });
+
     return (
         <div
+            ref={desktopRef}
             class="fixed inset-0 w-screen h-screen"
+            // 0.01 opacity prevents WebView2 from leaking drag to OS desktop.
+            // 0.005 gets rounded to 0 by Chromium; 0.01 is the minimum safe value.
+            style={{ "background-color": "rgba(255, 255, 255, 0.01)" }}
             onContextMenu={(e) => {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY });
             }}
-            onDragOver={(e) => { e.preventDefault(); e.dataTransfer!.dropEffect = 'move'; }}
-            onDrop={handleDomDrop}
         >
             {/* Cells �?<For> with key prevents destroying/recreating components on config change */}
             <For each={config()?.cells ?? []}>
@@ -310,6 +379,17 @@ export default function Desktop() {
                             )
                         }
                         onAddIcons={addIconsViaDialog}
+                        onDragStart={(iconId, cellId, icon, e) => {
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setDragState({
+                                iconId, cellId, icon,
+                                x: e.clientX, y: e.clientY,
+                                offsetX: e.clientX - rect.left,
+                                offsetY: e.clientY - rect.top,
+                            });
+                            // Prevent Rust polling from enabling click-through during drag
+                            invoke('set_dragging', { dragging: true }).catch(() => {});
+                        }}
                         onNewCell={createNewCell}
                         onExit={() => invoke('quit_app').catch(() => {})}
                     />
@@ -381,6 +461,27 @@ export default function Desktop() {
                     setConfig((p) => (p ? { ...p, show_titles: showTitles } : p))
                 }
             />
+
+            {/* Drag ghost — follows cursor during simulated drag */}
+            {dragState() && (
+                <div
+                    class="fixed z-[10000] pointer-events-none flex flex-col items-center gap-0.5 p-1.5 rounded-lg bg-white/80 dark:bg-gray-800/80 shadow-lg"
+                    style={{
+                        left: `${dragState()!.x - dragState()!.offsetX}px`,
+                        top: `${dragState()!.y - dragState()!.offsetY}px`,
+                        width: '72px',
+                    }}
+                >
+                    <div class="w-8 h-8 flex items-center justify-center">
+                        <FiFile class="text-lg text-gray-400 dark:text-gray-500" />
+                    </div>
+                    <span class="text-xs text-gray-700 dark:text-gray-200 truncate max-w-full">
+                        {dragState()!.icon.name.length > 10
+                            ? dragState()!.icon.name.slice(0, 9) + '\u2026'
+                            : dragState()!.icon.name}
+                    </span>
+                </div>
+            )}
         </div>
     );
 }

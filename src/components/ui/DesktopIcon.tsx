@@ -34,6 +34,7 @@ export interface DesktopIconProps {
     icon: DesktopIconData;
     onOpen: (icon: DesktopIconData) => void;
     onRemove?: (icon: DesktopIconData) => void;
+    onDragStart?: (iconId: string, e: PointerEvent) => void;
     class?: string;
     iconClass?: string;
     labelClass?: string;
@@ -46,9 +47,6 @@ export interface DesktopIconProps {
  */
 export default function DesktopIcon(props: DesktopIconProps) {
     const { t } = useI18n();
-
-    // SolidJS hook: async resource tied to the component's reactive scope.
-    // Re-fetches only if props.icon.path changes (which it won't for a given icon).
     const [iconUrl] = createResource(() => props.icon.path, fetchIcon);
 
     const name = props.icon.name;
@@ -64,13 +62,14 @@ export default function DesktopIcon(props: DesktopIconProps) {
                 props.class,
             )}
             onClick={(e) => { e.stopPropagation(); props.onOpen(props.icon); }}
-            title={props.icon.name}
-            draggable="true"
-            onDragStart={(e) => {
-                e.dataTransfer?.setData('application/deskchan-icon', props.icon.id);
-                e.dataTransfer?.setData('text/plain', props.icon.id); // fallback for WebView2 compat
-                e.dataTransfer!.effectAllowed = 'move';
+            onPointerDown={(e) => {
+                if (props.onDragStart) {
+                    e.preventDefault();
+                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    props.onDragStart(props.icon.id, e);
+                }
             }}
+            title={props.icon.name}
         >
             <div class={cn('w-10 h-10 flex items-center justify-center overflow-hidden', props.iconClass)}>
                 <Show when={iconUrl()} fallback={<FiFile class="text-xl text-gray-400 dark:text-gray-500" />}>

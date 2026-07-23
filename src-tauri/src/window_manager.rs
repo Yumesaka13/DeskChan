@@ -27,6 +27,8 @@ pub struct DeskState {
     pub regions: Mutex<Vec<CellRect>>,
     pub running: AtomicBool,
     pub ignoring: AtomicBool,
+    /// Set by JS when pointer-event drag is active — polling must NOT enable click-through.
+    pub dragging: AtomicBool,
 }
 
 impl DeskState {
@@ -35,6 +37,7 @@ impl DeskState {
             regions: Mutex::new(Vec::new()),
             running: AtomicBool::new(true),
             ignoring: AtomicBool::new(false),
+            dragging: AtomicBool::new(false),
         }
     }
 }
@@ -433,7 +436,7 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
                 && logical_y <= r.y + r.height
         });
 
-        let should_ignore = !over_cell;
+        let should_ignore = !over_cell && !state.dragging.load(Ordering::Relaxed);
         if should_ignore != state.ignoring.load(Ordering::Relaxed) {
             let _ = window.set_ignore_cursor_events(should_ignore);
             state.ignoring.store(should_ignore, Ordering::Relaxed);

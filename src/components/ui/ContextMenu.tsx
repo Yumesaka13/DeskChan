@@ -66,8 +66,9 @@ export default function ContextMenu(props: ContextMenuProps) {
                 ref={menuRef}
                 class={cn(
                     'glass-panel context-menu-enter',
-                    'fixed z-50 min-w-36 py-1',
+                    'fixed z-[9999] min-w-36 py-1',
                     'text-sm text-gray-800 dark:text-gray-100',
+                    'pointer-events-auto',
                     props.class,
                 )}
                 style={{

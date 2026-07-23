@@ -121,6 +121,7 @@ pub fn run() {
             bindings::save_config,
             bindings::open_file,
             bindings::update_cell_regions,
+            bindings::set_dragging,
             bindings::get_file_icon,
             bindings::quit_app,
             bindings::reset_config,

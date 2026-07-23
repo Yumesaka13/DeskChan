@@ -3,7 +3,7 @@
  * Drag the cell by its title bar or empty area.
  * Drop external icons onto the cell to add them.
  */
-import { createSignal, createMemo, For, type JSX } from 'solid-js';
+import { createSignal, createMemo, onMount, onCleanup, For, type JSX } from 'solid-js';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { type Cell } from '@bindings/Cell';
@@ -27,6 +27,8 @@ export interface CellBoxProps {
     onDropIcons: (cellId: string, iconPaths: string[]) => void;
     /** Called when an existing icon is dragged from another cell into this one */
     onMoveIcon?: (iconId: string, targetCellId: string) => void;
+    /** Called when an icon starts being dragged (pointer-event simulated) */
+    onDragStart?: (iconId: string, cellId: string, icon: DesktopIconData, e: PointerEvent) => void;
     /** Called to delete the cell */
     onDelete: (id: string) => void;
     /** Called to request adding icons via file dialog */
@@ -143,29 +145,22 @@ export default function CellBox(props: CellBoxProps) {
             : []),
     ];
 
-    // --- Drop icons onto cell ---
-    const handleDragOver = (e: DragEvent) => {
+    // --- Drop icons onto cell (native DOM events for WebView2 compat) ---
+    const handleDragOver = (e: Event) => {
         e.preventDefault();
-        e.dataTransfer!.dropEffect = 'move';
+        (e as DragEvent).dataTransfer!.dropEffect = 'move';
     };
 
-    const handleDrop = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
+    const handleDrop = (e: Event) => {
+        const ev = e as DragEvent;
+        ev.preventDefault();
+        ev.stopPropagation();
 
-        // Internal icon move — check custom MIME type + text/plain fallback
-        const iconId = e.dataTransfer?.getData('application/deskchan-icon')
-            || e.dataTransfer?.getData('text/plain');
-        if (iconId) {
-            props.onMoveIcon?.(iconId, props.cell.id);
-            return;
-        }
-
-        // External file drops (from Explorer / file manager)
-        if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        // External file drops only (internal icon moves use pointer events)
+        if (ev.dataTransfer?.files && ev.dataTransfer.files.length > 0) {
             const paths: string[] = [];
-            for (let i = 0; i < e.dataTransfer.files.length; i++) {
-                const file = e.dataTransfer.files[i];
+            for (let i = 0; i < ev.dataTransfer.files.length; i++) {
+                const file = ev.dataTransfer.files[i];
                 paths.push((file as unknown as { path?: string }).path ?? file.name);
             }
             if (paths.length > 0) {
@@ -173,6 +168,19 @@ export default function CellBox(props: CellBoxProps) {
             }
         }
     };
+
+    // Register native listeners on mount (bypasses SolidJS event delegation)
+    onMount(() => {
+        cellRef.addEventListener('dragenter', handleDragOver);
+        cellRef.addEventListener('dragover', handleDragOver);
+        cellRef.addEventListener('drop', handleDrop);
+    });
+
+    onCleanup(() => {
+        cellRef.removeEventListener('dragenter', handleDragOver);
+        cellRef.removeEventListener('dragover', handleDragOver);
+        cellRef.removeEventListener('drop', handleDrop);
+    });
 
     // Background style with optional custom color
     const bgStyle = createMemo(() => {
@@ -205,8 +213,6 @@ export default function CellBox(props: CellBoxProps) {
                 }}
                 onMouseDown={handleMouseDown}
                 onContextMenu={handleContextMenu}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
             >
                 {/* Title bar */}
                 <div
@@ -256,6 +262,9 @@ export default function CellBox(props: CellBoxProps) {
                                             icon={icon}
                                             onOpen={props.onOpenIcon}
                                             onRemove={(ic) => props.onRemoveIcon(props.cell.id, ic.id)}
+                                            onDragStart={props.onDragStart
+                                                ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
+                                                : undefined}
                                         />
                                     </div>
                                 )}
