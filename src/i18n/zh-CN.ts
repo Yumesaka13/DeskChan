@@ -22,6 +22,7 @@ export interface Translations {
     'desktop.context.new_cell': string;
     'desktop.context.refresh': string;
     'desktop.context.settings': string;
+    'desktop.context.reset': string;
     'desktop.context.exit': string;
 
     // Settings
@@ -57,6 +58,7 @@ export const zhCN: Translations = {
     'desktop.context.new_cell': '新建格子',
     'desktop.context.refresh': '刷新',
     'desktop.context.settings': '设置',
+    'desktop.context.reset': '重置配置',
     'desktop.context.exit': '退出 DeskChan',
 
     'settings.theme': '主题',

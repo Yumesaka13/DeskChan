@@ -20,23 +20,49 @@ fn desktop_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(".")
 }
 
-/// Scan the desktop folder for files/folders to populate initial config.
-fn scan_desktop() -> Vec<config::DesktopIcon> {
-    let mut icons = Vec::new();
-    let Ok(entries) = std::fs::read_dir(desktop_dir()) else { return icons };
+/// Scan the desktop folder for files/folders, categorized by type.
+/// Returns (folders, apps, files) vectors.
+fn scan_desktop_categorized() -> (Vec<config::DesktopIcon>, Vec<config::DesktopIcon>, Vec<config::DesktopIcon>) {
+    let mut folders = Vec::new();
+    let mut apps = Vec::new();
+    let mut files = Vec::new();
+
+    let Ok(entries) = std::fs::read_dir(desktop_dir()) else { return (folders, apps, files) };
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
         if name.starts_with('.') || name.eq_ignore_ascii_case("desktop.ini") { continue }
         let display = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_string();
-        icons.push(config::DesktopIcon {
+        let icon = config::DesktopIcon {
             id: uuid::Uuid::new_v4().to_string(),
             name: display,
             path: path.to_string_lossy().to_string(),
             icon_path: None,
-        });
+        };
+        if path.is_dir() {
+            folders.push(icon);
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            match ext.to_lowercase().as_str() {
+                "exe" | "lnk" | "bat" | "cmd" | "msc" => apps.push(icon),
+                _ => files.push(icon),
+            }
+        } else {
+            files.push(icon); // no extension → general file
+        }
     }
-    icons
+    (folders, apps, files)
+}
+
+fn make_default_cell(title: &str, x: f64, y: f64, w: f64, h: f64, icons: Vec<config::DesktopIcon>) -> config::Cell {
+    config::Cell {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: title.to_string(),
+        rect: config::CellRect { x, y, width: w, height: h },
+        background_color: None,
+        opacity: 0.85,
+        layout: config::CellLayout::Grid,
+        icons,
+    }
 }
 
 pub fn run() {
@@ -50,15 +76,26 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
 
-            // Create default config if missing — populate from actual desktop files
+            // Create default config — categorize desktop files into cells
             let config_path = data_dir.join("deskchan.toml");
             if !config_path.exists() {
-                let mut cfg = config::DeskConfig::default();
-                let icons = scan_desktop();
-                if !icons.is_empty() {
-                    cfg.cells[0].title = "Desktop".to_string();
-                    cfg.cells[0].icons = icons;
+                let (folders, apps, files) = scan_desktop_categorized();
+                let mut cells = Vec::new();
+                if !folders.is_empty() {
+                    cells.push(make_default_cell("Folders", 50.0, 50.0, 320.0, 280.0, folders));
                 }
+                if !apps.is_empty() {
+                    let x = if cells.is_empty() { 50.0 } else { 420.0 };
+                    cells.push(make_default_cell("Applications", x, 50.0, 320.0, 280.0, apps));
+                }
+                if !files.is_empty() {
+                    let x = if cells.len() < 2 { 50.0 + (cells.len() as f64) * 370.0 } else { 790.0 };
+                    cells.push(make_default_cell("Files", x, 50.0, 320.0, 280.0, files));
+                }
+                let cfg = config::DeskConfig {
+                    cells,
+                    ..config::DeskConfig::default()
+                };
                 config::save_config(&config_path, &cfg)
                     .expect("failed to write default config");
             }
@@ -86,6 +123,7 @@ pub fn run() {
             bindings::update_cell_regions,
             bindings::get_file_icon,
             bindings::quit_app,
+            bindings::reset_config,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

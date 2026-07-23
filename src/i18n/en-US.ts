@@ -19,6 +19,7 @@ export const enUS: Translations = {
     'desktop.context.new_cell': 'New Cell',
     'desktop.context.refresh': 'Refresh',
     'desktop.context.settings': 'Settings',
+    'desktop.context.reset': 'Reset Config',
     'desktop.context.exit': 'Exit DeskChan',
 
     'settings.theme': 'Theme',

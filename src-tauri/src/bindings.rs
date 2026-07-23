@@ -21,3 +21,16 @@ pub fn quit_app() -> Result<(), String> {
     crate::window_manager::show_desktop_icons();
     std::process::exit(0);
 }
+
+/// Delete the config file so next launch re-scans the desktop.
+#[tauri::command]
+pub fn reset_config(app: tauri::AppHandle) -> Result<(), String> {
+    let path = config_path(&app);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    // Exit so user can restart cleanly
+    #[cfg(target_os = "windows")]
+    crate::window_manager::show_desktop_icons();
+    std::process::exit(0);
+}

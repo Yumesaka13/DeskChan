@@ -33,9 +33,11 @@ export interface ContextMenuProps {
 export default function ContextMenu(props: ContextMenuProps) {
     let menuRef!: HTMLDivElement;
 
-    // Close on outside click
+    // Close on outside click — use mousedown + capture phase to avoid races
     const handleClickOutside = (e: MouseEvent) => {
         if (menuRef && !menuRef.contains(e.target as Node)) {
+            e.stopPropagation();
+            e.preventDefault();
             props.onClose();
         }
     };
@@ -47,16 +49,14 @@ export default function ContextMenu(props: ContextMenuProps) {
         }
     };
 
-    // Delay listener registration to avoid immediate close from the right-click event itself
-    setTimeout(() => {
-        document.addEventListener('click', handleClickOutside);
-        document.addEventListener('contextmenu', handleClickOutside);
-        document.addEventListener('keydown', handleKeyDown);
-    }, 0);
+    // Use capture phase so we see events before SolidJS synthetic handlers
+    document.addEventListener('mousedown', handleClickOutside, true);
+    document.addEventListener('contextmenu', handleClickOutside, true);
+    document.addEventListener('keydown', handleKeyDown);
 
     onCleanup(() => {
-        document.removeEventListener('click', handleClickOutside);
-        document.removeEventListener('contextmenu', handleClickOutside);
+        document.removeEventListener('mousedown', handleClickOutside, true);
+        document.removeEventListener('contextmenu', handleClickOutside, true);
         document.removeEventListener('keydown', handleKeyDown);
     });
 

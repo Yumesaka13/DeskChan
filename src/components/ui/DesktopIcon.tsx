@@ -68,6 +68,7 @@ export default function DesktopIcon(props: DesktopIconProps) {
             draggable="true"
             onDragStart={(e) => {
                 e.dataTransfer?.setData('application/deskchan-icon', props.icon.id);
+                e.dataTransfer?.setData('text/plain', props.icon.id); // fallback for WebView2 compat
                 e.dataTransfer!.effectAllowed = 'move';
             }}
         >

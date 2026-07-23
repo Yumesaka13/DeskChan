@@ -25,6 +25,8 @@ export interface CellBoxProps {
     onRemoveIcon: (cellId: string, iconId: string) => void;
     /** Called when icons are dropped onto the cell */
     onDropIcons: (cellId: string, iconPaths: string[]) => void;
+    /** Called when an existing icon is dragged from another cell into this one */
+    onMoveIcon?: (iconId: string, targetCellId: string) => void;
     /** Called to delete the cell */
     onDelete: (id: string) => void;
     /** Called to request adding icons via file dialog */
@@ -144,19 +146,25 @@ export default function CellBox(props: CellBoxProps) {
     // --- Drop icons onto cell ---
     const handleDragOver = (e: DragEvent) => {
         e.preventDefault();
-        e.dataTransfer!.dropEffect = 'copy';
+        e.dataTransfer!.dropEffect = 'move';
     };
 
     const handleDrop = (e: DragEvent) => {
         e.preventDefault();
-        e.stopPropagation(); // prevent Desktop's global handler from creating a new cell
-        // Handle external file drops (from Explorer)
+        e.stopPropagation();
+
+        // Internal icon move — check custom MIME type + text/plain fallback
+        const iconId = e.dataTransfer?.getData('application/deskchan-icon')
+            || e.dataTransfer?.getData('text/plain');
+        if (iconId) {
+            props.onMoveIcon?.(iconId, props.cell.id);
+            return;
+        }
+
+        // External file drops (from Explorer / file manager)
         if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
             const paths: string[] = [];
             for (let i = 0; i < e.dataTransfer.files.length; i++) {
-                // Tauri v2 webview doesn't expose full path via the File API directly.
-                // We use the file name as a fallback; the actual path resolution
-                // needs to be handled via Tauri's drag-drop event or file dialog.
                 const file = e.dataTransfer.files[i];
                 paths.push((file as unknown as { path?: string }).path ?? file.name);
             }

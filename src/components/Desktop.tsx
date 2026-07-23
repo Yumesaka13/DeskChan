@@ -14,7 +14,7 @@ import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import CellBox from './ui/CellBox';
 import ContextMenu, { type MenuItem } from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiPlus, FiRefreshCw, FiSettings, FiPower } from 'solid-icons/fi';
+import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2 } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 /** Shape of Tauri v2 drag-drop event payload. */
@@ -88,7 +88,46 @@ export default function Desktop() {
         };
         updateCell(cellId, (c) => ({ ...c, icons: [...c.icons, icon] }));
     };
+    /** Move an existing icon from its current cell to a target cell. */
+    const moveIconToCell = (iconId: string, targetCellId: string) => {
+        const cfg = config();
+        if (!cfg) return;
+        // Find the icon in its current cell
+        for (const cell of cfg.cells) {
+            const icon = cell.icons.find((i) => i.id === iconId);
+            if (icon && cell.id !== targetCellId) {
+                // Remove from source cell, add to target cell
+                setConfig((p) =>
+                    p
+                        ? {
+                              ...p,
+                              cells: p.cells.map((c) => {
+                                  if (c.id === cell.id) {
+                                      return { ...c, icons: c.icons.filter((i) => i.id !== iconId) };
+                                  }
+                                  if (c.id === targetCellId) {
+                                      return { ...c, icons: [...c.icons, icon] };
+                                  }
+                                  return c;
+                              }),
+                          }
+                        : p,
+                );
+                return;
+            }
+        }
+    };
 
+    /** Find the cell containing an icon by its ID. */
+    const findIconCell = (iconId: string): { cellId: string; icon: DIcon } | null => {
+        const cfg = config();
+        if (!cfg) return null;
+        for (const cell of cfg.cells) {
+            const icon = cell.icons.find((i) => i.id === iconId);
+            if (icon) return { cellId: cell.id, icon };
+        }
+        return null;
+    };
     /** Find which cell (if any) is at the given coordinates. */
     const cellAtPoint = (x: number, y: number): string | null => {
         const cfg = config();
@@ -104,9 +143,34 @@ export default function Desktop() {
         );
     };
 
-    // ── DOM drag-and-drop (browser-level file drops) ─────────────────────
+    // ── DOM drag-and-drop (file drops + icon moves) ──────────────────────
     const handleDomDrop = (e: DragEvent) => {
         e.preventDefault();
+
+        // Internal icon move — dropped on desktop background (outside any cell)
+        const iconId = e.dataTransfer?.getData('application/deskchan-icon')
+            || e.dataTransfer?.getData('text/plain');
+        if (iconId) {
+            const found = findIconCell(iconId);
+            if (found) {
+                // Move icon out of its cell into a new standalone cell
+                const cellId = crypto.randomUUID();
+                const newCell: Cell = {
+                    id: cellId,
+                    title: found.icon.name,
+                    rect: { x: e.clientX - 80, y: e.clientY - 60, width: 160, height: 120 },
+                    background_color: null,
+                    opacity: 0.85,
+                    layout: 'Grid',
+                    icons: [],
+                };
+                setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
+                moveIconToCell(iconId, cellId);
+            }
+            return;
+        }
+
+        // External file drops
         const files = e.dataTransfer?.files;
         if (!files?.length) return;
 
@@ -118,7 +182,6 @@ export default function Desktop() {
             if (targetCell) {
                 addIconToCell(targetCell, filePath);
             } else {
-                // Drop outside any cell �?create a new cell and move file into it
                 const cellId = crypto.randomUUID();
                 const newCell: Cell = {
                     id: cellId,
@@ -215,7 +278,7 @@ export default function Desktop() {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY });
             }}
-            onDragOver={(e) => e.preventDefault()}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer!.dropEffect = 'move'; }}
             onDrop={handleDomDrop}
         >
             {/* Cells �?<For> with key prevents destroying/recreating components on config change */}
@@ -240,6 +303,7 @@ export default function Desktop() {
                             updateCell(cid, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== iid) }))
                         }
                         onDropIcons={(cid, paths) => paths.forEach(p => addIconToCell(cid, p))}
+                        onMoveIcon={moveIconToCell}
                         onDelete={(id) =>
                             setConfig((p) =>
                                 p ? { ...p, cells: p.cells.filter((c) => c.id !== id) } : p,
@@ -285,6 +349,14 @@ export default function Desktop() {
                             label: t('desktop.context.settings'),
                             icon: <FiSettings />,
                             onClick: () => setSettingsOpen(true),
+                        },
+                        {
+                            label: t('desktop.context.reset'),
+                            icon: <FiTrash2 />,
+                            destructive: true,
+                            onClick: () => {
+                                invoke('reset_config').catch(() => {});
+                            },
                         },
                         {
                             label: t('desktop.context.exit'),
