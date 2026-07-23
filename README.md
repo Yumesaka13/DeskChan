@@ -4,6 +4,9 @@ A **Windows desktop organizer** inspired by [Coodesker](https://www.coodesker.co
 
 Built with **Tauri v2** + **SolidJS** + **UnoCSS** + **Bun**.
 
+<img width="2723" height="1822" alt="Screenshot" src="https://github.com/user-attachments/assets/c932f968-f902-4b11-9cbe-2d1d57107809" />
+
+
 ---
 
 ## Features
