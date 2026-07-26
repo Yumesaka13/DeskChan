@@ -101,21 +101,18 @@ pub fn make_icon(path: &Path, is_dir: bool) -> crate::config::DesktopIcon {
     }
 }
 
-/// Rebuild `free_icons` from the current desktop files, preserving cells.
-/// Files already living in a cell are skipped (the old version duplicated
-/// them as free icons). Positions use the -1 sentinel: the frontend assigns
-/// free grid slots on the next reconcile.
-pub fn reset_free_icons(cfg: &mut crate::config::DeskConfig) {
-    let in_cells: std::collections::HashSet<String> = cfg
-        .cells
-        .iter()
-        .flat_map(|c| c.icons.iter().map(|i| i.path.to_lowercase()))
-        .collect();
-    cfg.free_icons = list_entries()
-        .into_iter()
-        .filter(|(path, _)| !in_cells.contains(&path.to_string_lossy().to_lowercase()))
-        .map(|(path, is_dir)| make_icon(&path, is_dir))
-        .collect();
+/// The config DeskChan creates on its very first run: default settings, no
+/// cells, and every current desktop file as a free icon (sentinel -1
+/// positions; the frontend assigns grid slots on reconcile). Also what
+/// "reset config" restores.
+pub fn first_run_config() -> crate::config::DeskConfig {
+    crate::config::DeskConfig {
+        free_icons: list_entries()
+            .into_iter()
+            .map(|(path, is_dir)| make_icon(&path, is_dir))
+            .collect(),
+        ..crate::config::DeskConfig::default()
+    }
 }
 
 /// Copy a file into the user's desktop folder and return its new path.

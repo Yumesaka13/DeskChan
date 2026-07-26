@@ -193,19 +193,15 @@ pub fn init(window: &WebviewWindow) {
 
     // Drop to the desktop layer right away — a freshly created window sits
     // on top of every app opened before us and, being NOACTIVATE, would
-    // never be lowered by clicks.
-    pin_above_desktop(hwnd);
-
-    // Hide native desktop icons — our overlay replaces them entirely
-    hide_desktop_icons();
-}
-
-/// Hide the desktop's SysListView32 so our overlay is the only visible desktop.
-#[cfg(target_os = "windows")]
-fn hide_desktop_icons() {
-    if let Some(list_view) = find_desktop_listview() {
-        const SW_HIDE: i32 = 0;
-        unsafe { crate::win32::ShowWindow(list_view, SW_HIDE) };
+    // never be lowered by clicks. The polling loop retries if the shell
+    // isn't ready yet.
+    if let Some((host, lv)) = desktop_anchor() {
+        pin_above_desktop(hwnd, host);
+        // Hide native desktop icons — our overlay replaces them entirely
+        if let Some(lv) = lv {
+            const SW_HIDE: i32 = 0;
+            unsafe { crate::win32::ShowWindow(lv, SW_HIDE) };
+        }
     }
 }
 
@@ -282,21 +278,40 @@ fn find_desktop_listview() -> Option<isize> {
     find_desktop_windows().map(|(_, lv)| lv)
 }
 
+/// Resolve the Z-order anchor for this tick, with a degraded fallback.
+///
+/// Bug fix ("sometimes starts behind the desktop and Win+D knocks it away"):
+/// when SHELLDLL_DefView is not findable yet — shell still starting, or an
+/// Explorer restart recreating its window tree — the old code skipped
+/// pinning entirely, leaving the overlay wherever window creation put it,
+/// often BELOW the desktop and outside the Win+D-defense invariant. Falling
+/// back to the bare Progman window (which always exists) keeps the overlay
+/// glued even before the icon list view is born; the exact host takes over
+/// on a later tick once DefView appears.
+#[cfg(target_os = "windows")]
+fn desktop_anchor() -> Option<(isize, Option<isize>)> {
+    use crate::win32::{wide, FindWindowW};
+    if let Some((host, lv)) = find_desktop_windows() {
+        return Some((host, Some(lv)));
+    }
+    let progman = unsafe { FindWindowW(wide("Progman").as_ptr(), std::ptr::null()) };
+    (progman != 0).then_some((progman, None))
+}
+
 /// Enforce the desktop-glue invariant: our window sits IMMEDIATELY above the
-/// DefView host in the Z-order — below every app window, above the wallpaper
-/// and icons. Idempotent and cheap (read-only when already in place), so it
-/// is safe to call every polling tick.
+/// anchor (DefView host) in the Z-order — below every app window, above the
+/// wallpaper and icons. Idempotent and cheap (read-only when already in
+/// place), so it is safe to call every polling tick.
 ///
 /// Bug fix: without this, the overlay stayed wherever window creation put it
 /// (on top of every app started earlier) — WS_EX_NOACTIVATE means clicks
 /// never re-order it, so it "sometimes covered other applications".
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
-fn pin_above_desktop(our_hwnd: isize) {
+fn pin_above_desktop(our_hwnd: isize, host: isize) {
     use crate::win32::{GetWindow, GetWindowLongW, SetWindowPos};
     use constants::*;
 
-    let Some((host, _)) = find_desktop_windows() else { return };
     unsafe {
         let prev = GetWindow(host, GW_HWNDPREV);
         if prev == our_hwnd {
@@ -479,6 +494,13 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
     while state.running.load(Ordering::Relaxed) {
         std::thread::sleep(poll_interval);
 
+        // Re-check after the sleep: quit_app clears the flag and restores
+        // the native icons — a tick that was already sleeping must not wake
+        // up and re-hide them during teardown.
+        if !state.running.load(Ordering::Relaxed) {
+            break;
+        }
+
         // Skip while a pointer drag is active — re-ordering our own window
         // mid-drag could disturb WebView2's pointer capture.
         if state.dragging.load(Ordering::Relaxed) {
@@ -499,7 +521,20 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
         // Re-assert the desktop-glue invariant. This subsumes the old
         // Win+D "counter-attack": when Win+D raises the desktop above us,
         // we follow it up; apps the user re-activates go above us again.
-        pin_above_desktop(our_hwnd);
+        // The anchor is re-resolved every tick because Explorer moves
+        // SHELLDLL_DefView between Progman and WorkerW at runtime.
+        if let Some((host, lv)) = desktop_anchor() {
+            pin_above_desktop(our_hwnd, host);
+
+            // Re-hide the native icon list if it reappeared — Explorer
+            // recreates/reshows it on restart, F5, or display changes.
+            if let Some(lv) = lv {
+                if unsafe { crate::win32::IsWindowVisible(lv) } != 0 {
+                    const SW_HIDE: i32 = 0;
+                    unsafe { crate::win32::ShowWindow(lv, SW_HIDE) };
+                }
+            }
+        }
 
         // Defensive: tao re-applies its cached styles on some events; if the
         // caption/resize frame ever reappear, strip them again.
@@ -558,8 +593,44 @@ pub fn get_file_icon_base64(path: &str) -> Result<String, String> {
     let (pixels, size) = icon_ffi::extract_icon_rgba(path)?;
 
     use image::{ImageBuffer, ImageEncoder, Rgba};
-    let img = ImageBuffer::<Rgba<u8>, _>::from_raw(size, size, pixels)
+    let mut img = ImageBuffer::<Rgba<u8>, _>::from_raw(size, size, pixels)
         .ok_or("failed to create image buffer")?;
+
+    // Icons render at 48px CSS (96 physical at 2x DPI). Encoding the raw
+    // 256px jumbo bitmap cost ~7x more PNG time + base64 payload for zero
+    // visible gain — downscale first. (The corner-stamp check above needed
+    // the full canvas, so this must happen after extraction.)
+    //
+    // resize() filters channels independently and documents a premultiplied-
+    // alpha assumption; our canvas is transparent BLACK, so straight-alpha
+    // resizing blended black into every antialiased edge (dark halo). Round-
+    // trip through premultiplied alpha to keep edges clean.
+    const MAX_ENCODE_SIZE: u32 = 96;
+    let size = if size > MAX_ENCODE_SIZE {
+        for p in img.pixels_mut() {
+            let a = p[3] as u32;
+            for c in 0..3 {
+                p[c] = ((p[c] as u32 * a + 127) / 255) as u8;
+            }
+        }
+        img = image::imageops::resize(
+            &img,
+            MAX_ENCODE_SIZE,
+            MAX_ENCODE_SIZE,
+            image::imageops::FilterType::Triangle,
+        );
+        for p in img.pixels_mut() {
+            let a = p[3] as u32;
+            if a > 0 {
+                for c in 0..3 {
+                    p[c] = ((p[c] as u32 * 255 + a / 2) / a).min(255) as u8;
+                }
+            }
+        }
+        MAX_ENCODE_SIZE
+    } else {
+        size
+    };
 
     let mut png_bytes = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png_bytes)
