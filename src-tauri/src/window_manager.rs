@@ -54,6 +54,8 @@ mod constants {
     pub const WS_MAXIMIZEBOX: i32 = 0x00010000;
     pub const WS_THICKFRAME: i32 = 0x00040000;
     pub const WS_CAPTION: i32 = 0x00C00000;
+    pub const WS_SYSMENU: i32 = 0x00080000;
+    pub const WS_POPUP: i32 = 0x80000000u32 as i32;
 
     // GWL indices
     pub const GWL_EXSTYLE: i32 = -20;
@@ -66,6 +68,8 @@ mod constants {
     pub const WM_SYSCOMMAND: u32 = 0x0112;
     pub const WM_SIZE: u32 = 0x0005;
     pub const WM_NCHITTEST: u32 = 0x0084;
+    pub const WM_NCPAINT: u32 = 0x0085;
+    pub const WM_NCACTIVATE: u32 = 0x0086;
 
     // Message parameters
     pub const SC_MINIMIZE: usize = 0xF020;
@@ -150,26 +154,15 @@ pub fn init(window: &WebviewWindow) {
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
 
-        // Strip minimize/maximize boxes AND the resize frame + caption.
-        // Bug fix: an undecorated-but-resizable window still carries
-        // WS_THICKFRAME — it painted a visible edge on the left at startup
-        // and let users drag-resize the overlay. SWP_FRAMECHANGED is required
-        // for the style change to take effect.
-        let style = GetWindowLongW(hwnd, GWL_STYLE);
-        SetWindowLongW(
-            hwnd,
-            GWL_STYLE,
-            style & !WS_MINIMIZEBOX & !WS_MAXIMIZEBOX & !WS_THICKFRAME & !WS_CAPTION,
-        );
-        SetWindowPos(
-            hwnd,
-            0,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
+        // Strip every frame style (see strip_frame_styles for the WS_POPUP
+        // rationale and the phantom-title-bar / draggable-left-edge history).
+        //
+        // NOTE: tauri.conf.json must keep `"shadow": false`. With the default
+        // shadow enabled, tao implements undecorated shadows by KEEPING
+        // WS_CAPTION and hiding it in WM_NCCALCSIZE — stripping the style
+        // here then desyncs that compensation, which showed up as a phantom
+        // title-bar band at the top and an outer size larger than requested.
+        strip_frame_styles(hwnd);
 
         // ── AppBar registration ──────────────────────────────────────
         // Register as Application Desktop Toolbar. Windows taskbar uses
@@ -264,6 +257,20 @@ fn find_desktop_windows() -> Option<(isize, isize)> {
                     return Some((progman, lv));
                 }
             }
+            // Some Win11 builds nest DefView one level deeper:
+            // Progman → WorkerW → SHELLDLL_DefView → SysListView32
+            let workerw_cls = wide("WorkerW");
+            let mut ww = FindWindowExW(progman, 0, workerw_cls.as_ptr(), std::ptr::null());
+            while ww != 0 {
+                let def = FindWindowExW(ww, 0, shelldll.as_ptr(), std::ptr::null());
+                if def != 0 {
+                    let lv = FindWindowExW(def, 0, syslist.as_ptr(), std::ptr::null());
+                    if lv != 0 {
+                        return Some((progman, lv));
+                    }
+                }
+                ww = FindWindowExW(progman, ww, workerw_cls.as_ptr(), std::ptr::null());
+            }
         }
 
         // Try WorkerW (Win10+). There may be multiple WorkerW windows;
@@ -353,6 +360,13 @@ unsafe extern "system" fn wndproc(
         // The overlay must never be user-movable or user-resizable.
         WM_NCHITTEST => return HTCLIENT,
 
+        // Suppress ALL non-client painting. Without this, activating the
+        // window (clicking it focuses the WebView2 child) lets the default
+        // handlers repaint a frame — the "title bar comes back after a
+        // click" bug. Standard borderless-window practice.
+        WM_NCPAINT => return 0,
+        WM_NCACTIVATE => return 1,
+
         // Block SIZE_MINIMIZED → prevents WebView2 from stopping render
         WM_SIZE if wparam == SIZE_MINIMIZED => return 0,
 
@@ -396,6 +410,36 @@ pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
         return;
     };
     let (x, y, w, h) = get_work_area(app);
+
+    // On Windows, set the OUTER rect directly. Tauri's set_size sets the
+    // inner size and lets tao pad it via AdjustWindowRectEx with its cached
+    // styles — that padding made the overlay overhang the work area.
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                extern "system" {
+                    fn SetWindowPos(
+                        h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32,
+                    ) -> i32;
+                }
+                unsafe {
+                    SetWindowPos(
+                        wh.hwnd.get() as isize,
+                        0,
+                        x as i32,
+                        y as i32,
+                        w as i32,
+                        h as i32,
+                        constants::SWP_NOZORDER | constants::SWP_NOACTIVATE,
+                    );
+                }
+                return;
+            }
+        }
+    }
+
     let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
     let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
 }
@@ -474,6 +518,46 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
         // Win+D "counter-attack": when Win+D raises the desktop above us,
         // we follow it up; apps the user re-activates go above us again.
         pin_above_desktop(our_hwnd);
+
+        // Defensive: tao re-applies its cached styles on some events; if the
+        // caption/resize frame ever reappear, strip them again.
+        strip_frame_styles(our_hwnd);
+    }
+}
+
+/// Enforce the frameless popup style. No-op when already clean.
+///
+/// History: undecorated-but-resizable still carried WS_THICKFRAME (visible
+/// draggable left edge at startup); a later re-appearing caption came from
+/// default non-client processing. Plain WS_POPUP without caption/sysmenu has
+/// no non-client machinery at all, so nothing can ever draw a frame —
+/// regardless of who processes WM_NCACTIVATE / WM_NCPAINT down the line.
+/// SWP_FRAMECHANGED is required for style changes to take effect.
+#[cfg(target_os = "windows")]
+fn strip_frame_styles(hwnd: isize) {
+    use constants::*;
+    extern "system" {
+        fn GetWindowLongW(h: isize, i: i32) -> i32;
+        fn SetWindowLongW(h: isize, i: i32, v: i32) -> i32;
+        fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32) -> i32;
+    }
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        let clean =
+            (style & !WS_CAPTION & !WS_THICKFRAME & !WS_SYSMENU & !WS_MINIMIZEBOX & !WS_MAXIMIZEBOX)
+                | WS_POPUP;
+        if style != clean {
+            SetWindowLongW(hwnd, GWL_STYLE, clean);
+            SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
     }
 }
 
