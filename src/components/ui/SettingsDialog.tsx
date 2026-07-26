@@ -1,7 +1,7 @@
 /**
  * SettingsDialog — a modal dialog for app settings (theme, language, etc.).
  */
-import { createSignal, Show } from 'solid-js';
+import { createEffect, createSignal, Show, untrack } from 'solid-js';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { useTheme } from '~/lib/theme';
@@ -29,6 +29,17 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     const { t, locale, setLocale } = useI18n();
     const { theme, setTheme } = useTheme();
     const [showTitles, setShowTitles] = createSignal(props.showTitles);
+
+    // Re-sync from the config on the closed→open edge only — the signal's
+    // initial value is captured at mount, before the config even loads, but
+    // syncing continuously would clobber unsaved toggles when unrelated
+    // config updates (watcher reconciles, cell moves) land mid-edit.
+    let wasOpen = false;
+    createEffect(() => {
+        const open = props.open;
+        if (open && !wasOpen) setShowTitles(untrack(() => props.showTitles));
+        wasOpen = open;
+    });
 
     const handleSave = () => {
         props.onSave({ showTitles: showTitles() });

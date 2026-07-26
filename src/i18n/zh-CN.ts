@@ -14,6 +14,7 @@ export interface Translations {
     'cell.context.delete_cell': string;
     'cell.collapse': string;
     'cell.expand': string;
+    'cell.hover_expand': string;
 
     // Icon
     'icon.remove': string;
@@ -77,6 +78,7 @@ export const zhCN: Translations = {
     'cell.context.delete_cell': '删除格子',
     'cell.collapse': '折叠',
     'cell.expand': '展开',
+    'cell.hover_expand': '悬停时自动展开',
 
     'icon.remove': '移除图标',
     'icon.open_file': '打开文件',

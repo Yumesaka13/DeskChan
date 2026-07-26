@@ -5,7 +5,7 @@
  * Double-click the title bar to roll the cell up to its title (Coodesker
  * style) — the collapsed state is persisted in the config.
  */
-import { createSignal, createMemo, onMount, onCleanup, For } from 'solid-js';
+import { createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { CELL_TITLEBAR_H } from '~/lib/grid';
@@ -13,7 +13,7 @@ import { type Cell } from '@bindings/Cell';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
-import { FiPlus, FiTrash2, FiSettings, FiPower, FiChevronUp } from 'solid-icons/fi';
+import { FiPlus, FiTrash2, FiSettings, FiPower, FiChevronUp, FiZap } from 'solid-icons/fi';
 
 export interface CellBoxProps {
     /** The cell data */
@@ -34,6 +34,14 @@ export interface CellBoxProps {
     onDragStart?: (iconId: string, cellId: string, icon: DesktopIconData, e: PointerEvent) => void;
     /** Called to toggle the persisted collapsed state */
     onToggleCollapse: (id: string) => void;
+    /** Called to toggle hover-expand mode (auto-unroll while hovered) */
+    onToggleHoverExpand: (id: string) => void;
+    /** Whether cell title bars are shown (collapsed cells always keep theirs) */
+    showTitles?: boolean;
+    /** Live hover state — owned by Desktop so it survives cell re-creation */
+    hovered?: boolean;
+    /** Reports pointer enter/leave; Desktop debounces the leave */
+    onHover?: (id: string, inside: boolean) => void;
     /** Called to delete the cell */
     onDelete: (id: string) => void;
     /** Called to request adding icons via file dialog */
@@ -61,6 +69,16 @@ export default function CellBox(props: CellBoxProps) {
     // Live-resize must bypass the height transition, or the cell lags the cursor
     const [isResizing, setIsResizing] = createSignal(false);
     const collapsed = () => props.cell.collapsed;
+
+    // Hover-expand (Coodesker's second collapse mode): while the pointer is
+    // over a collapsed cell, temporarily unroll it; roll back shortly after
+    // the pointer leaves. The hover state itself lives in Desktop (keyed by
+    // cell id) so it survives this component being re-created on data change.
+    /** What is actually rendered right now (persisted state + hover). */
+    const displayCollapsed = () =>
+        collapsed() && !(props.cell.hover_expand && props.hovered === true);
+    /** Title bar is always reachable on collapsed cells, else it follows the setting. */
+    const showTitleBar = () => props.showTitles !== false || collapsed();
 
     let cellRef!: HTMLDivElement;
     let dragOffset = { x: 0, y: 0 };
@@ -129,6 +147,17 @@ export default function CellBox(props: CellBoxProps) {
             icon: <FiPlus />,
             onClick: () => props.onAddIcons(props.cell.id),
         },
+        // Keep bar-only actions reachable when titles are hidden
+        {
+            label: collapsed() ? t('cell.expand') : t('cell.collapse'),
+            icon: <FiChevronUp />,
+            onClick: () => props.onToggleCollapse(props.cell.id),
+        },
+        {
+            label: t('cell.hover_expand'),
+            icon: <FiZap />,
+            onClick: () => props.onToggleHoverExpand(props.cell.id),
+        },
         {
             label: t('cell.context.settings'),
             icon: <FiSettings />,
@@ -194,7 +223,9 @@ export default function CellBox(props: CellBoxProps) {
         const bg = props.cell.background_color;
         const opacity = props.cell.opacity;
         if (bg) {
-            return { backgroundColor: bg, opacity };
+            // Solid style objects take kebab-case CSS property names —
+            // camelCase keys are silently ignored by style.setProperty.
+            return { 'background-color': bg, opacity };
         }
         return { opacity };
     });
@@ -203,11 +234,15 @@ export default function CellBox(props: CellBoxProps) {
         <>
             <div
                 ref={cellRef}
+                data-cell-id={props.cell.id}
                 class={cn(
                     'glass-panel deskchan-no-select',
                     'absolute flex flex-col overflow-hidden',
                     'min-w-[120px]',
-                    !collapsed() && 'min-h-[80px]',
+                    !displayCollapsed() && 'min-h-[80px]',
+                    // Collapsed cells stay raised so neither hover roll-up nor
+                    // the collapse animation lets covered content pop in front
+                    collapsed() && 'z-30',
                     isDragging() && 'cursor-grabbing shadow-2xl',
                     // Smooth Coodesker-style roll-up/down (height) + shadow.
                     // Disabled during live resize so the cell tracks the cursor.
@@ -218,45 +253,71 @@ export default function CellBox(props: CellBoxProps) {
                     left: `${props.cell.rect.x}px`,
                     top: `${props.cell.rect.y}px`,
                     width: `${props.cell.rect.width}px`,
-                    height: `${collapsed() ? CELL_TITLEBAR_H : props.cell.rect.height}px`,
+                    height: `${displayCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height}px`,
                     ...bgStyle(),
                 }}
                 onMouseDown={handleMouseDown}
                 onContextMenu={handleContextMenu}
+                onMouseEnter={() => props.onHover?.(props.cell.id, true)}
+                onMouseLeave={() => props.onHover?.(props.cell.id, false)}
+                onDblClick={(e) => {
+                    // With the title bar hidden there is no other collapse
+                    // affordance — double-click on the body toggles instead.
+                    if (showTitleBar()) return;
+                    const el = e.target as HTMLElement;
+                    if (el.closest('[data-icon]') || el.closest('button')) return;
+                    props.onToggleCollapse(props.cell.id);
+                }}
             >
                 {/* Title bar — double-click rolls the cell up/down */}
-                <div
-                    class={cn(
-                        'flex items-center gap-2 px-3',
-                        'text-xs font-medium text-gray-500 dark:text-gray-400',
-                        'cursor-grab flex-shrink-0',
-                        !collapsed() && 'border-b border-gray-200/50 dark:border-gray-600/30',
-                        props.titleClass,
-                    )}
-                    style={{ height: `${CELL_TITLEBAR_H}px` }}
-                    onMouseDown={handleMouseDown}
-                    onDblClick={() => props.onToggleCollapse(props.cell.id)}
-                >
-                    <span class="flex-1 truncate">{props.cell.title}</span>
-                    {/* Icon count badge — visible when rolled up */}
-                    {collapsed() && (
-                        <span class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums">
-                            {props.cell.icons.length}
-                        </span>
-                    )}
-                    <button
-                        onClick={(e) => { e.stopPropagation(); props.onToggleCollapse(props.cell.id); }}
-                        onDblClick={(e) => e.stopPropagation()}
+                <Show when={showTitleBar()}>
+                    <div
                         class={cn(
-                            'p-0.5 rounded hover:bg-gray-200/60 dark:hover:bg-gray-600/40',
-                            'transition-transform duration-200',
-                            collapsed() && 'rotate-180',
+                            'flex items-center gap-2 px-3',
+                            'text-xs font-medium text-gray-500 dark:text-gray-400',
+                            'cursor-grab flex-shrink-0',
+                            !displayCollapsed() && 'border-b border-gray-200/50 dark:border-gray-600/30',
+                            props.titleClass,
                         )}
-                        title={collapsed() ? t('cell.expand') : t('cell.collapse')}
+                        style={{ height: `${CELL_TITLEBAR_H}px` }}
+                        onMouseDown={handleMouseDown}
+                        onDblClick={() => props.onToggleCollapse(props.cell.id)}
                     >
-                        <FiChevronUp class="w-3.5 h-3.5" />
-                    </button>
-                </div>
+                        {/* Coodesker-style top-left switch: hover auto-expand on/off */}
+                        <button
+                            onClick={(e) => { e.stopPropagation(); props.onToggleHoverExpand(props.cell.id); }}
+                            onDblClick={(e) => e.stopPropagation()}
+                            class={cn(
+                                'p-0.5 rounded hover:bg-gray-200/60 dark:hover:bg-gray-600/40',
+                                props.cell.hover_expand
+                                    ? 'text-brand-primary'
+                                    : 'text-gray-300 dark:text-gray-600',
+                            )}
+                            title={t('cell.hover_expand')}
+                        >
+                            <FiZap class="w-3 h-3" />
+                        </button>
+                        <span class="flex-1 truncate">{props.cell.title}</span>
+                        {/* Icon count badge — visible when rolled up */}
+                        {displayCollapsed() && (
+                            <span class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums">
+                                {props.cell.icons.length}
+                            </span>
+                        )}
+                        <button
+                            onClick={(e) => { e.stopPropagation(); props.onToggleCollapse(props.cell.id); }}
+                            onDblClick={(e) => e.stopPropagation()}
+                            class={cn(
+                                'p-0.5 rounded hover:bg-gray-200/60 dark:hover:bg-gray-600/40',
+                                'transition-transform duration-200',
+                                collapsed() && 'rotate-180',
+                            )}
+                            title={collapsed() ? t('cell.expand') : t('cell.collapse')}
+                        >
+                            <FiChevronUp class="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </Show>
 
                 {/* Icon area — stays mounted while collapsed (clipped by the
                     animated container height) so expanding is instant */}
@@ -291,8 +352,8 @@ export default function CellBox(props: CellBoxProps) {
                     )}
                 </div>
 
-                {/* Resize handle — hidden when collapsed */}
-                {!collapsed() && (
+                {/* Resize handle — hidden when rolled up */}
+                {!displayCollapsed() && (
                     <div
                         class={cn(
                             'absolute bottom-0 right-0 w-4 h-4',

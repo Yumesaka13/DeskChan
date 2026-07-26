@@ -30,6 +30,24 @@ export default function Desktop() {
     const [settingsOpen, setSettingsOpen] = createSignal(false);
     const [selectedId, setSelectedId] = createSignal<string | null>(null);
 
+    // Hover-expand state lives here (not in CellBox) so it survives cell
+    // component re-creation when the cell object is replaced by updateCell.
+    const [hoverCellId, setHoverCellId] = createSignal<string | null>(null);
+    let hoverLeaveTimer: ReturnType<typeof setTimeout> | null = null;
+    const cellHover = (id: string, inside: boolean) => {
+        if (hoverLeaveTimer) { clearTimeout(hoverLeaveTimer); hoverLeaveTimer = null; }
+        if (inside) {
+            setHoverCellId(id);
+        } else {
+            // Small delay so brief pointer exits don't flap the roll-up
+            hoverLeaveTimer = setTimeout(
+                () => setHoverCellId((cur) => (cur === id ? null : cur)),
+                250,
+            );
+        }
+    };
+    onCleanup(() => { if (hoverLeaveTimer) clearTimeout(hoverLeaveTimer); });
+
     const viewportSize = () => ({ width: window.innerWidth, height: window.innerHeight });
 
     // ── Pointer-event simulated drag state ───────────────────────────────
@@ -237,18 +255,12 @@ export default function Desktop() {
         }
     };
 
-    /** Find which cell (if any) is at the given coordinates.
-     *  Collapsed cells only occupy their title bar. */
-    const cellAtPoint = (x: number, y: number): string | null => {
-        const cfg = config();
-        if (!cfg) return null;
-        return (
-            cfg.cells.find((c) => {
-                const r = effectiveCellRect(c);
-                return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
-            })?.id ?? null
-        );
-    };
+    /** Find which cell (if any) is at the given coordinates. DOM hit-testing
+     *  reflects what the user actually sees — a rolled-up cell only occupies
+     *  its title bar, a hover-expanded one its full box. */
+    const cellAtPoint = (x: number, y: number): string | null =>
+        document.elementFromPoint(x, y)?.closest('[data-cell-id]')
+            ?.getAttribute('data-cell-id') ?? null;
 
     /** Resolve a free-icon drop position — nearest unoccupied slot when snapping. */
     const resolveDropPos = (x: number, y: number, excludeIconId?: string): { x: number; y: number } => {
@@ -343,6 +355,7 @@ export default function Desktop() {
             opacity: 0.85,
             layout: 'Grid',
             collapsed: false,
+            hover_expand: true,
             icons: [],
         };
         setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
@@ -459,9 +472,19 @@ export default function Desktop() {
                             });
                             invoke('set_dragging', { dragging: true }).catch(() => {});
                         }}
-                        onToggleCollapse={(id) =>
-                            updateCell(id, (c) => ({ ...c, collapsed: !c.collapsed }))
+                        onToggleCollapse={(id) => {
+                            // Explicit collapse must roll up immediately even
+                            // with the pointer still inside (mouseenter only
+                            // re-fires after leaving and re-entering)
+                            setHoverCellId(null);
+                            updateCell(id, (c) => ({ ...c, collapsed: !c.collapsed }));
+                        }}
+                        onToggleHoverExpand={(id) =>
+                            updateCell(id, (c) => ({ ...c, hover_expand: !c.hover_expand }))
                         }
+                        showTitles={config()?.show_titles ?? true}
+                        hovered={hoverCellId() === cell.id}
+                        onHover={cellHover}
                         onNewCell={createNewCell}
                         onExit={() => invoke('quit_app').catch(() => {})}
                     />

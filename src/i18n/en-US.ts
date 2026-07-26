@@ -13,6 +13,7 @@ export const enUS: Translations = {
     'cell.context.delete_cell': 'Delete Cell',
     'cell.collapse': 'Collapse',
     'cell.expand': 'Expand',
+    'cell.hover_expand': 'Expand on hover',
 
     'icon.remove': 'Remove Icon',
     'icon.open_file': 'Open File',
