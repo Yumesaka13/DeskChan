@@ -63,8 +63,16 @@ pub struct Cell {
     /// Rolled up to the title bar only (Coodesker-style double-click collapse)
     #[serde(default)]
     pub collapsed: bool,
+    /// When collapsed, hovering temporarily unrolls the cell (Coodesker's
+    /// second collapse mode, toggled from the cell's title bar)
+    #[serde(default = "default_true")]
+    pub hover_expand: bool,
     /// Icons contained within this cell
     pub icons: Vec<DesktopIcon>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Top-level desktop configuration saved as TOML.

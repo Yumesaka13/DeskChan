@@ -124,6 +124,7 @@ export function organizeConfig(
             opacity: 0.85,
             layout: 'Grid',
             collapsed: false,
+            hover_expand: true,
             icons,
         });
         curX += CELL_W + GAP;
