@@ -44,6 +44,32 @@ pub struct CellRect {
     pub height: f64,
 }
 
+/// Sizing mode of the sub-box tab strip.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../bindings/")]
+pub enum SubStyle {
+    /// Tabs hug their labels (wrap to multiple rows when needed)
+    #[default]
+    Compact,
+    /// Tabs stretch equally to fill the cell width (single row)
+    Stretch,
+}
+
+/// A tabbed sub-box inside a cell, rendered as a tab strip right under the
+/// title bar. One nesting level only — sub-boxes hold icons, not more boxes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../bindings/")]
+pub struct SubCell {
+    pub id: String,
+    /// Tab label
+    pub title: String,
+    /// Icons contained in this sub-box
+    #[serde(default)]
+    pub icons: Vec<DesktopIcon>,
+}
+
 /// A desktop cell (fence/box) that holds icons.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[derive(ts_rs::TS)]
@@ -67,8 +93,17 @@ pub struct Cell {
     /// second collapse mode, toggled from the cell's title bar)
     #[serde(default = "default_true")]
     pub hover_expand: bool,
-    /// Icons contained within this cell
+    /// Icons contained within this cell (the implicit first tab)
     pub icons: Vec<DesktopIcon>,
+    /// Tabbed sub-boxes shown under the title bar
+    #[serde(default)]
+    pub sub_cells: Vec<SubCell>,
+    /// Selected tab: a sub-cell id, or None for the cell's own icons
+    #[serde(default)]
+    pub active_sub: Option<String>,
+    /// How the sub-box tabs size themselves
+    #[serde(default)]
+    pub sub_style: SubStyle,
 }
 
 fn default_true() -> bool {
