@@ -101,6 +101,52 @@ pub fn make_icon(path: &Path, is_dir: bool) -> crate::config::DesktopIcon {
     }
 }
 
+/// Rebuild `free_icons` from the current desktop files, preserving cells.
+/// Files already living in a cell are skipped (the old version duplicated
+/// them as free icons). Positions use the -1 sentinel: the frontend assigns
+/// free grid slots on the next reconcile.
+pub fn reset_free_icons(cfg: &mut crate::config::DeskConfig) {
+    let in_cells: std::collections::HashSet<String> = cfg
+        .cells
+        .iter()
+        .flat_map(|c| c.icons.iter().map(|i| i.path.to_lowercase()))
+        .collect();
+    cfg.free_icons = list_entries()
+        .into_iter()
+        .filter(|(path, _)| !in_cells.contains(&path.to_string_lossy().to_lowercase()))
+        .map(|(path, is_dir)| make_icon(&path, is_dir))
+        .collect();
+}
+
+/// Copy a file into the user's desktop folder and return its new path.
+/// Avoids overwriting an existing file by appending " (n)".
+pub fn copy_file_to_desktop(path: &str) -> Result<String, String> {
+    let desktop = user_desktop_dir();
+    let source = Path::new(path);
+    let filename = source.file_name().ok_or("invalid source")?;
+    let dest = desktop.join(filename);
+    let dest = if dest.exists() {
+        let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+        let ext = dest
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| format!(".{e}"))
+            .unwrap_or_default();
+        let mut n = 1;
+        loop {
+            let candidate = desktop.join(format!("{stem} ({n}){ext}"));
+            if !candidate.exists() {
+                break candidate;
+            }
+            n += 1;
+        }
+    } else {
+        dest
+    };
+    std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
 /// Watch the desktop folders and emit a debounced `desktop-changed` event so
 /// the frontend can reconcile its icon list (add new files, drop deleted
 /// ones). Fixes the "dropping a file on the desktop never refreshes" bug —

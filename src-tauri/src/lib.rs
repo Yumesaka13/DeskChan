@@ -7,6 +7,8 @@ mod bindings;
 mod config;
 mod desktop;
 mod shell_menu;
+#[cfg(target_os = "windows")]
+mod win32;
 mod window_manager;
 
 pub fn run() {

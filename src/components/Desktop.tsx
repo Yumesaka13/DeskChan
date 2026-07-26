@@ -434,11 +434,11 @@ export default function Desktop() {
         // capture:true ensures we intercept BEFORE any child (CellBox) ignores the event
         window.addEventListener('dragenter', allow, { capture: true });
         window.addEventListener('dragover', allow, { capture: true });
-        window.addEventListener('drop', handleDomDrop as unknown as EventListener, { capture: true });
+        window.addEventListener('drop', handleDomDrop, { capture: true });
         onCleanup(() => {
             window.removeEventListener('dragenter', allow, { capture: true });
             window.removeEventListener('dragover', allow, { capture: true });
-            window.removeEventListener('drop', handleDomDrop as unknown as EventListener, { capture: true });
+            window.removeEventListener('drop', handleDomDrop, { capture: true });
         });
     });
 

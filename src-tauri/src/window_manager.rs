@@ -112,6 +112,8 @@ pub fn init(window: &WebviewWindow) {
     use constants::*;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+    use crate::win32::{GetWindowLongW, SetWindowLongW};
+
     let hwnd = match window.window_handle().ok().map(|r| match r.as_raw() {
         RawWindowHandle::Win32(w) => w.hwnd.get() as isize,
         _ => 0isize,
@@ -120,14 +122,11 @@ pub fn init(window: &WebviewWindow) {
         None => return,
     };
 
-    // FFI declarations
+    // FFI declarations (unique to init — shared ones live in crate::win32)
     extern "system" {
-        fn GetWindowLongW(h: isize, i: i32) -> i32;
-        fn SetWindowLongW(h: isize, i: i32, v: i32) -> i32;
         fn GetWindowLongPtrW(h: isize, i: i32) -> isize;
         fn SetWindowLongPtrW(h: isize, i: i32, v: isize) -> isize;
         fn SHAppBarMessage(dw: u32, p: *mut AppBarData) -> usize;
-        fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32) -> i32;
     }
 
     #[repr(C)]
@@ -204,24 +203,18 @@ pub fn init(window: &WebviewWindow) {
 /// Hide the desktop's SysListView32 so our overlay is the only visible desktop.
 #[cfg(target_os = "windows")]
 fn hide_desktop_icons() {
-    extern "system" {
-        fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
-    }
     if let Some(list_view) = find_desktop_listview() {
         const SW_HIDE: i32 = 0;
-        unsafe { ShowWindow(list_view, SW_HIDE) };
+        unsafe { crate::win32::ShowWindow(list_view, SW_HIDE) };
     }
 }
 
 /// Show the desktop's SysListView32 — restore native desktop icons.
 #[cfg(target_os = "windows")]
 pub fn show_desktop_icons() {
-    extern "system" {
-        fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
-    }
     if let Some(list_view) = find_desktop_listview() {
         const SW_SHOW: i32 = 5;
-        unsafe { ShowWindow(list_view, SW_SHOW) };
+        unsafe { crate::win32::ShowWindow(list_view, SW_SHOW) };
     }
 }
 
@@ -234,14 +227,7 @@ pub fn show_desktop_icons() {
 /// and WorkerW → SHELLDLL_DefView → SysListView32 (modern Windows 10/11).
 #[cfg(target_os = "windows")]
 fn find_desktop_windows() -> Option<(isize, isize)> {
-    extern "system" {
-        fn FindWindowW(class: *const u16, name: *const u16) -> isize;
-        fn FindWindowExW(parent: isize, child: isize, class: *const u16, name: *const u16) -> isize;
-    }
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
+    use crate::win32::{wide, FindWindowExW, FindWindowW};
 
     let shelldll = wide("SHELLDLL_DefView");
     let syslist = wide("SysListView32");
@@ -307,13 +293,8 @@ fn find_desktop_listview() -> Option<isize> {
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 fn pin_above_desktop(our_hwnd: isize) {
+    use crate::win32::{GetWindow, GetWindowLongW, SetWindowPos};
     use constants::*;
-
-    extern "system" {
-        fn GetWindow(h: isize, cmd: u32) -> isize;
-        fn GetWindowLongW(h: isize, i: i32) -> i32;
-        fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32) -> i32;
-    }
 
     let Some((host, _)) = find_desktop_windows() else { return };
     unsafe {
@@ -425,13 +406,8 @@ pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         if let Ok(handle) = window.window_handle() {
             if let RawWindowHandle::Win32(wh) = handle.as_raw() {
-                extern "system" {
-                    fn SetWindowPos(
-                        h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32,
-                    ) -> i32;
-                }
                 unsafe {
-                    SetWindowPos(
+                    crate::win32::SetWindowPos(
                         wh.hwnd.get() as isize,
                         0,
                         x as i32,
@@ -541,12 +517,8 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
 /// SWP_FRAMECHANGED is required for style changes to take effect.
 #[cfg(target_os = "windows")]
 fn strip_frame_styles(hwnd: isize) {
+    use crate::win32::{GetWindowLongW, SetWindowLongW, SetWindowPos};
     use constants::*;
-    extern "system" {
-        fn GetWindowLongW(h: isize, i: i32) -> i32;
-        fn SetWindowLongW(h: isize, i: i32, v: i32) -> i32;
-        fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, f: u32) -> i32;
-    }
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_STYLE);
         let clean =
@@ -601,6 +573,7 @@ pub fn get_file_icon_base64(path: &str) -> Result<String, String> {
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 mod icon_ffi {
+    use crate::win32::{ComGuard, Guid};
     use std::ffi::c_void;
 
     #[repr(C)]
@@ -629,13 +602,6 @@ mod icon_ffi {
     struct BitmapInfo {
         bmiHeader: BitmapInfoHeader,
     }
-    #[repr(C)]
-    struct Guid {
-        d1: u32,
-        d2: u16,
-        d3: u16,
-        d4: [u8; 8],
-    }
 
     // IID_IImageList {46EB5926-582E-4017-9FDF-E8998DAA0950}
     const IID_IMAGE_LIST: Guid = Guid {
@@ -656,7 +622,6 @@ mod icon_ffi {
     const DIB_RGB_COLORS: u32 = 0;
     const BI_RGB: u32 = 0;
     const DI_NORMAL: u32 = 3;
-    const COINIT_APARTMENTTHREADED: u32 = 0x2;
 
     extern "system" {
         fn SHGetFileInfoW(path: *const u16, attr: u32, info: *mut ShFileInfo, cb: u32, flags: u32) -> usize;
@@ -668,25 +633,6 @@ mod icon_ffi {
         fn DeleteObject(o: isize) -> i32;
         fn DestroyIcon(i: isize) -> i32;
         fn DrawIconEx(dc: isize, x: i32, y: i32, hi: isize, cx: i32, cy: i32, step: u32, brush: isize, flags: u32) -> i32;
-        fn CoInitializeEx(pv: *mut c_void, co: u32) -> i32;
-        fn CoUninitialize();
-    }
-
-    /// Balances CoInitializeEx/CoUninitialize (shell APIs want COM ready on
-    /// the calling thread — Tauri command threads are not guaranteed to be).
-    struct ComGuard(bool);
-    impl ComGuard {
-        fn init() -> Self {
-            // S_OK / S_FALSE (>= 0) must be balanced; RPC_E_CHANGED_MODE must not
-            Self(unsafe { CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED) } >= 0)
-        }
-    }
-    impl Drop for ComGuard {
-        fn drop(&mut self) {
-            if self.0 {
-                unsafe { CoUninitialize() };
-            }
-        }
     }
 
     /// Get an HICON of the given shell image-list size (SHIL_*) for a
@@ -818,7 +764,7 @@ mod icon_ffi {
     /// Extract the best available icon as (rgba_pixels, size).
     pub fn extract_icon_rgba(path: &str) -> Result<(Vec<u8>, u32), String> {
         let _com = ComGuard::init();
-        let wide_path: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide_path = crate::win32::wide(path);
         let mut shfi = ShFileInfo {
             hIcon: 0,
             iIcon: 0,

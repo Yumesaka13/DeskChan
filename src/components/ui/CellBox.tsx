@@ -184,22 +184,22 @@ export default function CellBox(props: CellBoxProps) {
     ];
 
     // --- Drop icons onto cell (native DOM events for WebView2 compat) ---
-    const handleDragOver = (e: Event) => {
+    const handleDragOver = (e: DragEvent) => {
         e.preventDefault();
-        (e as DragEvent).dataTransfer!.dropEffect = 'move';
+        e.dataTransfer!.dropEffect = 'move';
     };
 
-    const handleDrop = (e: Event) => {
-        const ev = e as DragEvent;
-        ev.preventDefault();
-        ev.stopPropagation();
+    const handleDrop = (e: DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
 
         // External file drops only (internal icon moves use pointer events)
-        if (ev.dataTransfer?.files && ev.dataTransfer.files.length > 0) {
+        if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
             const paths: string[] = [];
-            for (let i = 0; i < ev.dataTransfer.files.length; i++) {
-                const file = ev.dataTransfer.files[i];
-                paths.push((file as unknown as { path?: string }).path ?? file.name);
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+                // WebView2 exposes the absolute path on the File object
+                const file = e.dataTransfer.files[i] as File & { path?: string };
+                paths.push(file.path ?? file.name);
             }
             if (paths.length > 0) {
                 props.onDropIcons(props.cell.id, paths);
