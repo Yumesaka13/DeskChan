@@ -4,6 +4,9 @@
  * Drop external icons onto the cell to add them.
  * Double-click the title bar to roll the cell up to its title (Coodesker
  * style) — the collapsed state is persisted in the config.
+ * The title-bar corner button switches the collapse MODE (Coodesker style):
+ * auto (roll up on leave, expand on hover; up+down chevron icon) vs manual
+ * (pinned; single chevron icon).
  */
 import { createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
 import { cn } from '~/lib/utils';
@@ -13,7 +16,8 @@ import { type Cell } from '@bindings/Cell';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
-import { FiPlus, FiTrash2, FiSettings, FiPower, FiChevronUp, FiZap } from 'solid-icons/fi';
+import { FiPlus, FiTrash2, FiSettings, FiPower, FiChevronUp } from 'solid-icons/fi';
+import { BsChevronDown, BsChevronExpand } from 'solid-icons/bs';
 
 export interface CellBoxProps {
     /** The cell data */
@@ -157,7 +161,7 @@ export default function CellBox(props: CellBoxProps) {
         },
         {
             label: t('cell.hover_expand'),
-            icon: <FiZap />,
+            icon: <BsChevronExpand />,
             onClick: () => props.onToggleHoverExpand(props.cell.id),
         },
         {
@@ -285,20 +289,6 @@ export default function CellBox(props: CellBoxProps) {
                         onMouseDown={handleMouseDown}
                         onDblClick={() => props.onToggleCollapse(props.cell.id)}
                     >
-                        {/* Coodesker-style top-left switch: hover auto-expand on/off */}
-                        <button
-                            onClick={(e) => { e.stopPropagation(); props.onToggleHoverExpand(props.cell.id); }}
-                            onDblClick={(e) => e.stopPropagation()}
-                            class={cn(
-                                'p-0.5 rounded hover:bg-gray-200/60 dark:hover:bg-gray-600/40',
-                                props.cell.hover_expand
-                                    ? 'text-brand-primary'
-                                    : 'text-gray-300 dark:text-gray-600',
-                            )}
-                            title={t('cell.hover_expand')}
-                        >
-                            <FiZap class="w-3 h-3" />
-                        </button>
                         <span class="flex-1 truncate">{props.cell.title}</span>
                         {/* Icon count badge — visible when rolled up */}
                         {displayCollapsed() && (
@@ -306,17 +296,25 @@ export default function CellBox(props: CellBoxProps) {
                                 {props.cell.icons.length}
                             </span>
                         )}
+                        {/* Mode switch (Coodesker style): CLICK TOGGLES THE
+                            COLLAPSE MODE, and the icon shows the current one —
+                            auto (roll up on leave / expand on hover) is the
+                            up+down chevron, manual (pinned) a single chevron.
+                            Collapse itself is a title-bar double-click. */}
                         <button
-                            onClick={(e) => { e.stopPropagation(); props.onToggleCollapse(props.cell.id); }}
+                            onClick={(e) => { e.stopPropagation(); props.onToggleHoverExpand(props.cell.id); }}
                             onDblClick={(e) => e.stopPropagation()}
                             class={cn(
-                                'p-0.5 rounded hover:bg-gray-200/60 dark:hover:bg-gray-600/40',
-                                'transition-transform duration-200',
-                                collapsed() && 'rotate-180',
+                                'p-1 rounded-md transition-colors duration-150',
+                                'text-gray-400 dark:text-gray-500',
+                                'hover:text-gray-700 dark:hover:text-gray-200',
+                                'hover:bg-gray-200/50 dark:hover:bg-gray-600/40',
                             )}
-                            title={collapsed() ? t('cell.expand') : t('cell.collapse')}
+                            title={t('cell.hover_expand')}
                         >
-                            <FiChevronUp class="w-3.5 h-3.5" />
+                            {props.cell.hover_expand
+                                ? <BsChevronExpand class="w-3 h-3" />
+                                : <BsChevronDown class="w-3 h-3" />}
                         </button>
                     </div>
                 </Show>
