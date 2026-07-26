@@ -647,9 +647,6 @@ export default function Desktop() {
                             updateCell(id, (c) => ({ ...c, rect: { ...c.rect, width: w, height: h } }))
                         }
                         onOpenIcon={openIcon}
-                        onRemoveIcon={(cid, iid) =>
-                            updateCell(cid, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== iid) }))
-                        }
                         onDropIcons={(cid, paths) => paths.forEach(p => addIconToCell(cid, p))}
                         onMoveIcon={moveIconToCell}
                         onDelete={(id) =>
