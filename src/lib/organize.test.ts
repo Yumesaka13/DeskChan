@@ -20,7 +20,7 @@ function cell(title: string, icons: DesktopIcon[] = []): Cell {
         id: `cell-${title}`, title,
         rect: { x: 900, y: 500, width: 320, height: 240 },
         background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
-        hover_expand: true, icons,
+        hover_expand: true, icons, sub_cells: [], active_sub: null, sub_style: 'Compact',
     };
 }
 

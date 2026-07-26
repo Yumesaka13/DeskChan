@@ -150,12 +150,21 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
     // (dropping live hover/resize state) even when the cell didn't change.
     const cells = cfg.cells.map((c) => {
         const icons = c.icons.filter((i) => !gone(i.path));
-        return icons.length === c.icons.length ? c : { ...c, icons };
+        const subs = c.sub_cells.map((s) => {
+            const kept = s.icons.filter((i) => !gone(i.path));
+            return kept.length === s.icons.length ? s : { ...s, icons: kept };
+        });
+        const subsChanged = subs.some((s, n) => s !== c.sub_cells[n]);
+        if (icons.length === c.icons.length && !subsChanged) return c;
+        return { ...c, icons, sub_cells: subsChanged ? subs : c.sub_cells };
     });
 
     const known = new Set([
         ...freeKept.map((i) => i.path.toLowerCase()),
-        ...cells.flatMap((c) => c.icons.map((i) => i.path.toLowerCase())),
+        ...cells.flatMap((c) => [
+            ...c.icons.map((i) => i.path.toLowerCase()),
+            ...c.sub_cells.flatMap((s) => s.icons.map((i) => i.path.toLowerCase())),
+        ]),
     ]);
     const fresh: DesktopIcon[] = scan.entries
         .filter((e) => !known.has(e.path.toLowerCase()))
@@ -186,7 +195,7 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
         fresh.length > 0 ||
         unplaced.length > 0 ||
         free.length !== cfg.free_icons.length ||
-        cells.some((c, n) => c.icons.length !== cfg.cells[n]!.icons.length);
+        cells.some((c, n) => c !== cfg.cells[n]);
     return changed ? { ...cfg, cells, free_icons: free } : cfg;
 }
 

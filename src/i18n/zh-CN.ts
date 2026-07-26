@@ -5,15 +5,13 @@ export interface Translations {
     'app.desc': string;
 
     // Cell
-    'cell.new': string;
-    'cell.delete': string;
-    'cell.rename': string;
     'cell.empty_hint': string;
-    'cell.context.add_icon': string;
-    'cell.context.settings': string;
+    'cell.context.new_sub': string;
+    'cell.context.delete_sub': string;
+    'cell.context.sub_style': string;
+    'cell.sub_style.compact': string;
+    'cell.sub_style.stretch': string;
     'cell.context.delete_cell': string;
-    'cell.collapse': string;
-    'cell.expand': string;
     'cell.hover_expand': string;
 
     // Icon
@@ -52,8 +50,8 @@ export interface Translations {
 
     // Defaults
     'default.cell_title': string;
+    'default.sub_title': string;
     'default.icon_name': string;
-    'default.add_files_title': string;
 
     // Settings
     'settings.theme': string;
@@ -83,15 +81,13 @@ export const zhCN: Translations = {
     'app.name': 'DeskChan 桌面盒子',
     'app.desc': '桌面分区盒子工具',
 
-    'cell.new': '新建格子',
-    'cell.delete': '删除格子',
-    'cell.rename': '重命名',
     'cell.empty_hint': '拖入图标或右键添加',
-    'cell.context.add_icon': '添加图标',
-    'cell.context.settings': '格子设置',
+    'cell.context.new_sub': '创建子盒子',
+    'cell.context.delete_sub': '删除子盒子',
+    'cell.context.sub_style': '子格子样式',
+    'cell.sub_style.compact': '紧凑',
+    'cell.sub_style.stretch': '自适应占满',
     'cell.context.delete_cell': '删除格子',
-    'cell.collapse': '折叠',
-    'cell.expand': '展开',
     'cell.hover_expand': '悬停时自动展开',
 
     'icon.remove': '移除图标',
@@ -125,8 +121,8 @@ export const zhCN: Translations = {
     'toast.import_failed': '导入失败，请检查文件是否有效',
 
     'default.cell_title': '格子',
+    'default.sub_title': '子盒子',
     'default.icon_name': '未知',
-    'default.add_files_title': '选择要添加的文件',
 
     'settings.theme': '主题',
     'settings.language': '语言',

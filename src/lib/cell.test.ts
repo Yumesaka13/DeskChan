@@ -1,0 +1,74 @@
+import { describe, expect, it } from 'vitest';
+import type { Cell } from '@bindings/Cell';
+import type { DesktopIcon } from '@bindings/DesktopIcon';
+import { activeIcons, deleteSubCell, removeIcon, totalIconCount, withActiveIcons } from './cell';
+
+function icon(id: string): DesktopIcon {
+    return { id, name: id, path: `C:\\D\\${id}.txt`, icon_path: null, pos_x: 0, pos_y: 0 };
+}
+
+function cell(partial?: Partial<Cell>): Cell {
+    return {
+        id: 'c1', title: 'Cell',
+        rect: { x: 0, y: 0, width: 320, height: 240 },
+        background_color: null, opacity: 0.85, layout: 'Grid',
+        collapsed: false, hover_expand: true,
+        icons: [icon('a')],
+        sub_cells: [
+            { id: 's1', title: 'Sub 1', icons: [icon('b')] },
+            { id: 's2', title: 'Sub 2', icons: [icon('c'), icon('d')] },
+        ],
+        active_sub: null,
+        sub_style: 'Compact',
+        ...partial,
+    };
+}
+
+describe('activeIcons / withActiveIcons', () => {
+    it('targets the cell own icons when no sub is active', () => {
+        const c = cell();
+        expect(activeIcons(c).map((i) => i.id)).toEqual(['a']);
+        const next = withActiveIcons(c, (icons) => [...icons, icon('x')]);
+        expect(next.icons.map((i) => i.id)).toEqual(['a', 'x']);
+        expect(next.sub_cells).toBe(c.sub_cells); // untouched
+    });
+
+    it('targets the active sub-box, leaving siblings alone', () => {
+        const c = cell({ active_sub: 's2' });
+        expect(activeIcons(c).map((i) => i.id)).toEqual(['c', 'd']);
+        const next = withActiveIcons(c, (icons) => icons.slice(1));
+        expect(next.sub_cells[1]!.icons.map((i) => i.id)).toEqual(['d']);
+        expect(next.sub_cells[0]).toBe(c.sub_cells[0]);
+        expect(next.icons).toBe(c.icons);
+    });
+
+    it('falls back to own icons when active_sub points at a deleted sub', () => {
+        const c = cell({ active_sub: 'ghost' });
+        expect(activeIcons(c).map((i) => i.id)).toEqual(['a']);
+    });
+});
+
+describe('removeIcon', () => {
+    it('removes from whichever container holds the icon', () => {
+        const c = cell();
+        expect(totalIconCount(removeIcon(c, 'a'))).toBe(3);
+        expect(totalIconCount(removeIcon(c, 'c'))).toBe(3);
+        expect(removeIcon(c, 'c').sub_cells[1]!.icons.map((i) => i.id)).toEqual(['d']);
+    });
+});
+
+describe('deleteSubCell', () => {
+    it('moves the sub icons into the own tab and clears the selection', () => {
+        const c = cell({ active_sub: 's2' });
+        const next = deleteSubCell(c, 's2');
+        expect(next.icons.map((i) => i.id)).toEqual(['a', 'c', 'd']);
+        expect(next.sub_cells.map((s) => s.id)).toEqual(['s1']);
+        expect(next.active_sub).toBeNull();
+        expect(totalIconCount(next)).toBe(totalIconCount(c));
+    });
+
+    it('keeps an unrelated selection', () => {
+        const next = deleteSubCell(cell({ active_sub: 's1' }), 's2');
+        expect(next.active_sub).toBe('s1');
+    });
+});

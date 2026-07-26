@@ -126,6 +126,9 @@ export function organizeConfig(
             collapsed: false,
             hover_expand: true,
             icons,
+            sub_cells: [],
+            active_sub: null,
+            sub_style: 'Compact',
         });
         curX += CELL_W + GAP;
         rowMaxH = Math.max(rowMaxH, height);

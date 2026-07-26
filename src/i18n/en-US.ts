@@ -4,15 +4,13 @@ export const enUS: Translations = {
     'app.name': 'DeskChan Desktop Box',
     'app.desc': 'Desktop Fence Tool',
 
-    'cell.new': 'New Cell',
-    'cell.delete': 'Delete Cell',
-    'cell.rename': 'Rename',
     'cell.empty_hint': 'Drag icons here or right-click to add',
-    'cell.context.add_icon': 'Add Icon',
-    'cell.context.settings': 'Cell Settings',
+    'cell.context.new_sub': 'New Sub-box',
+    'cell.context.delete_sub': 'Delete Sub-box',
+    'cell.context.sub_style': 'Sub-box Style',
+    'cell.sub_style.compact': 'Compact',
+    'cell.sub_style.stretch': 'Fill Width',
     'cell.context.delete_cell': 'Delete Cell',
-    'cell.collapse': 'Collapse',
-    'cell.expand': 'Expand',
     'cell.hover_expand': 'Expand on hover',
 
     'icon.remove': 'Remove Icon',
@@ -46,8 +44,8 @@ export const enUS: Translations = {
     'toast.import_failed': 'Import failed — is the file valid?',
 
     'default.cell_title': 'Cell',
+    'default.sub_title': 'Sub-box',
     'default.icon_name': 'Unknown',
-    'default.add_files_title': 'Select files to add',
 
     'settings.theme': 'Theme',
     'settings.language': 'Language',
