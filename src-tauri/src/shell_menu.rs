@@ -3,6 +3,8 @@
 //! Right-clicking an icon shows the file's REAL Explorer menu (open, run as
 //! admin, pin, send to, properties, …) via IShellFolder::GetUIObjectOf →
 //! IContextMenu, using the same raw-FFI style as the icon extraction code.
+//! Multiple files are supported like Explorer's multi-selection, as long as
+//! they live in the same folder (child PIDLs must share one parent folder).
 //!
 //! DeskChan-specific entries (e.g. "remove from cell") are appended after a
 //! separator; the function returns which extra entry was picked, if any —
@@ -11,11 +13,26 @@
 #[cfg(target_os = "windows")]
 pub fn show(
     window: tauri::WebviewWindow,
-    path: String,
+    paths: Vec<String>,
     extra_items: Vec<String>,
 ) -> Result<Option<u32>, String> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+    if paths.is_empty() {
+        return Err("no paths".into());
+    }
+    // Enforce the same-parent invariant here, not just at the call site: a
+    // child PIDL handed to the WRONG parent folder would make shell verbs
+    // act on "parentA\nameB" — possibly a real, different file.
+    let parent = |p: &str| {
+        std::path::Path::new(p)
+            .parent()
+            .map(|d| d.to_string_lossy().to_lowercase())
+    };
+    let first_parent = parent(&paths[0]);
+    if paths.iter().any(|p| parent(p) != first_parent) {
+        return Err("paths must share one parent folder".into());
+    }
     let hwnd = match window.window_handle().ok().map(|h| match h.as_raw() {
         RawWindowHandle::Win32(w) => w.hwnd.get() as isize,
         _ => 0isize,
@@ -31,7 +48,7 @@ pub fn show(
     let (tx, rx) = std::sync::mpsc::channel();
     window
         .run_on_main_thread(move || {
-            let _ = tx.send(unsafe { menu_ffi::show_menu(hwnd, &path, &extra_items) });
+            let _ = tx.send(unsafe { menu_ffi::show_menu(hwnd, &paths, &extra_items) });
         })
         .map_err(|e| e.to_string())?;
     rx.recv().map_err(|_| "menu closure dropped".to_string())?
@@ -49,7 +66,7 @@ pub fn forward_menu_msg(msg: u32, wparam: usize, lparam: isize) -> Option<isize>
 #[cfg(not(target_os = "windows"))]
 pub fn show(
     _window: tauri::WebviewWindow,
-    _path: String,
+    _paths: Vec<String>,
     _extra_items: Vec<String>,
 ) -> Result<Option<u32>, String> {
     Err("native context menu not supported on this platform".into())
@@ -218,40 +235,55 @@ mod menu_ffi {
         }
     }
 
-    /// Show the shell context menu for `path` at the cursor position.
+    /// Show the shell context menu for `paths` (same-folder files, like an
+    /// Explorer multi-selection) at the cursor position.
     /// Returns Ok(Some(i)) when appended extra item `i` was picked,
     /// Ok(None) when a native verb ran or the menu was dismissed.
     pub unsafe fn show_menu(
         hwnd: isize,
-        path: &str,
+        paths: &[String],
         extra_items: &[String],
     ) -> Result<Option<u32>, String> {
         let _com = ComGuard::init();
 
-        // Path → absolute PIDL → parent IShellFolder + child PIDL
-        let wide_path = wide(path);
-        let mut pidl: *mut c_void = std::ptr::null_mut();
-        if SHParseDisplayName(wide_path.as_ptr(), std::ptr::null_mut(), &mut pidl, 0, std::ptr::null_mut()) != 0
-            || pidl.is_null()
-        {
-            return Err("SHParseDisplayName failed".into());
-        }
         struct PidlFree(*mut c_void);
         impl Drop for PidlFree {
             fn drop(&mut self) {
                 unsafe { CoTaskMemFree(self.0) };
             }
         }
-        let _pidl_free = PidlFree(pidl);
 
-        let mut folder_ptr: *mut c_void = std::ptr::null_mut();
-        let mut pidl_child: *const c_void = std::ptr::null();
-        if SHBindToParent(pidl, &IID_ISHELL_FOLDER, &mut folder_ptr, &mut pidl_child) != 0
-            || folder_ptr.is_null()
-        {
-            return Err("SHBindToParent failed".into());
+        // Each path → absolute PIDL → (parent IShellFolder, child PIDL).
+        // All files share one folder, so the first parent serves them all;
+        // the other parents are released immediately. Child PIDLs point into
+        // their absolute PIDL, which `pidls` keeps alive past the menu loop.
+        let mut pidls: Vec<PidlFree> = Vec::with_capacity(paths.len());
+        let mut children: Vec<*const c_void> = Vec::with_capacity(paths.len());
+        let mut folder: Option<ComPtr> = None;
+        for path in paths {
+            let wide_path = wide(path);
+            let mut pidl: *mut c_void = std::ptr::null_mut();
+            if SHParseDisplayName(wide_path.as_ptr(), std::ptr::null_mut(), &mut pidl, 0, std::ptr::null_mut()) != 0
+                || pidl.is_null()
+            {
+                return Err("SHParseDisplayName failed".into());
+            }
+            pidls.push(PidlFree(pidl));
+
+            let mut folder_ptr: *mut c_void = std::ptr::null_mut();
+            let mut pidl_child: *const c_void = std::ptr::null();
+            if SHBindToParent(pidl, &IID_ISHELL_FOLDER, &mut folder_ptr, &mut pidl_child) != 0
+                || folder_ptr.is_null()
+            {
+                return Err("SHBindToParent failed".into());
+            }
+            let this_folder = ComPtr(folder_ptr);
+            if folder.is_none() {
+                folder = Some(this_folder);
+            } // else: dropped here, releasing the duplicate folder instance
+            children.push(pidl_child);
         }
-        let folder = ComPtr(folder_ptr);
+        let folder = folder.expect("paths verified non-empty");
 
         // IShellFolder vtable slot 10: GetUIObjectOf
         type GetUIObjectOfFn = unsafe extern "system" fn(
@@ -268,8 +300,8 @@ mod menu_ffi {
         if get_ui_object(
             folder.0,
             hwnd,
-            1,
-            &pidl_child,
+            children.len() as u32,
+            children.as_ptr(),
             &IID_ICONTEXT_MENU,
             std::ptr::null_mut(),
             &mut menu_ptr,

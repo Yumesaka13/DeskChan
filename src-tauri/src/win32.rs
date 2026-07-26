@@ -30,6 +30,7 @@ extern "system" {
     pub fn FindWindowExW(parent: isize, child: isize, class: *const u16, name: *const u16)
         -> isize;
     pub fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+    pub fn IsWindowVisible(hwnd: isize) -> i32;
 }
 
 extern "system" {

@@ -144,13 +144,18 @@ pub fn load_config(path: &std::path::Path) -> Result<DeskConfig, Box<dyn std::er
     Ok(cfg)
 }
 
-/// Save config to a TOML file path.
+/// Save config to a TOML file path. Atomic (temp file + rename): a reader —
+/// including the next app launch — can never observe a truncated file, even
+/// if two writers race or the process dies mid-write.
 pub fn save_config(
     path: &std::path::Path,
     cfg: &DeskConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = toml::to_string_pretty(cfg)?;
-    std::fs::write(path, content)?;
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, content)?;
+    // Same-volume rename replaces atomically on Windows (MOVEFILE_REPLACE_EXISTING)
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 

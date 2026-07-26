@@ -29,7 +29,6 @@ export interface Translations {
     'desktop.context.arrangement': string;
     'desktop.context.arrange_auto': string;
     'desktop.context.arrange_snap': string;
-    'desktop.context.reset': string;
     'desktop.context.exit': string;
 
     // Organize categories (cell titles)
@@ -45,6 +44,11 @@ export interface Translations {
     'toast.load_config_failed': string;
     'toast.open_file_failed': string;
     'toast.organize_failed': string;
+    'toast.reset_done': string;
+    'toast.export_done': string;
+    'toast.export_failed': string;
+    'toast.import_done': string;
+    'toast.import_failed': string;
 
     // Defaults
     'default.cell_title': string;
@@ -58,6 +62,16 @@ export interface Translations {
     'settings.title': string;
     'settings.save': string;
     'settings.cancel': string;
+    'settings.tab.general': string;
+    'settings.tab.appearance': string;
+    'settings.tab.data': string;
+    'settings.export': string;
+    'settings.import': string;
+    'settings.export_title': string;
+    'settings.import_title': string;
+    'settings.reset': string;
+    'settings.reset_hint': string;
+    'settings.reset_confirm': string;
 
     // Theme
     'theme.light': string;
@@ -91,7 +105,6 @@ export const zhCN: Translations = {
     'desktop.context.arrangement': '排列方式',
     'desktop.context.arrange_auto': '自动排列',
     'desktop.context.arrange_snap': '对齐到网格',
-    'desktop.context.reset': '重置配置',
     'desktop.context.exit': '退出 DeskChan',
 
     'organize.folders': '文件夹',
@@ -105,6 +118,11 @@ export const zhCN: Translations = {
     'toast.load_config_failed': '加载配置失败',
     'toast.open_file_failed': '打开文件失败',
     'toast.organize_failed': '整理失败',
+    'toast.reset_done': '已恢复到初始状态',
+    'toast.export_done': '配置已导出',
+    'toast.export_failed': '导出失败',
+    'toast.import_done': '配置已导入',
+    'toast.import_failed': '导入失败，请检查文件是否有效',
 
     'default.cell_title': '格子',
     'default.icon_name': '未知',
@@ -116,6 +134,16 @@ export const zhCN: Translations = {
     'settings.title': '设置',
     'settings.save': '保存',
     'settings.cancel': '取消',
+    'settings.tab.general': '通用',
+    'settings.tab.appearance': '外观',
+    'settings.tab.data': '数据',
+    'settings.export': '导出配置',
+    'settings.import': '导入配置',
+    'settings.export_title': '导出配置到…',
+    'settings.import_title': '选择要导入的配置文件',
+    'settings.reset': '重置配置',
+    'settings.reset_hint': '恢复到首次运行时的状态，所有格子将被清除',
+    'settings.reset_confirm': '确定要重置配置吗？所有格子将被清除，桌面图标恢复自动排列。',
 
     'theme.light': '浅色',
     'theme.dark': '深色',

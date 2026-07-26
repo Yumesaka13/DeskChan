@@ -26,28 +26,31 @@ pub fn run() {
             // (positions use the -1 sentinel; the frontend assigns grid slots)
             let config_path = data_dir.join("deskchan.toml");
             if !config_path.exists() {
-                let free_icons = desktop::list_entries()
-                    .into_iter()
-                    .map(|(path, is_dir)| desktop::make_icon(&path, is_dir))
-                    .collect();
-                let cfg = config::DeskConfig {
-                    free_icons,
-                    ..config::DeskConfig::default()
-                };
-                config::save_config(&config_path, &cfg)
+                config::save_config(&config_path, &desktop::first_run_config())
                     .expect("failed to write default config");
             } else {
-                // Migrate old configs (v2 → v3): move cell icons to free_icons
-                let mut cfg = config::load_config(&config_path)
-                    .expect("failed to load config");
-                if cfg.version < 3 {
-                    for cell in &mut cfg.cells {
-                        cfg.free_icons.append(&mut cell.icons);
+                match config::load_config(&config_path) {
+                    // Migrate old configs (v2 → v3): move cell icons to free_icons
+                    Ok(mut cfg) if cfg.version < 3 => {
+                        for cell in &mut cfg.cells {
+                            cfg.free_icons.append(&mut cell.icons);
+                        }
+                        cfg.cells.clear();
+                        cfg.version = 3;
+                        config::save_config(&config_path, &cfg)
+                            .expect("failed to save migrated config");
                     }
-                    cfg.cells.clear();
-                    cfg.version = 3;
-                    config::save_config(&config_path, &cfg)
-                        .expect("failed to save migrated config");
+                    Ok(_) => {}
+                    // An unparseable config must never brick startup (the old
+                    // .expect here did): set it aside for inspection and
+                    // start fresh.
+                    Err(_) => {
+                        let _ = std::fs::rename(
+                            &config_path,
+                            data_dir.join("deskchan.toml.corrupt"),
+                        );
+                        let _ = config::save_config(&config_path, &desktop::first_run_config());
+                    }
                 }
             }
 
@@ -80,6 +83,8 @@ pub fn run() {
             bindings::reset_config,
             bindings::scan_desktop,
             bindings::copy_to_desktop,
+            bindings::export_config,
+            bindings::import_config,
             bindings::show_icon_menu,
         ])
         .run(tauri::generate_context!())

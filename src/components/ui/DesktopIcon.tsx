@@ -18,8 +18,8 @@ export interface DesktopIconProps {
     icon: DesktopIconData;
     /** Double-click (native behavior) — opens the file */
     onOpen: (icon: DesktopIconData) => void;
-    /** Single click — select */
-    onSelect?: (icon: DesktopIconData) => void;
+    /** Single click — select (event exposes ctrl/meta for multi-select) */
+    onSelect?: (icon: DesktopIconData, e: MouseEvent) => void;
     selected?: boolean;
     onRemove?: (icon: DesktopIconData) => void;
     onDragStart?: (iconId: string, e: PointerEvent) => void;
@@ -45,13 +45,12 @@ export default function DesktopIcon(props: DesktopIconProps) {
                 'w-18 group relative',
                 props.class,
             )}
-            onClick={(e) => { e.stopPropagation(); props.onSelect?.(props.icon); }}
+            onClick={(e) => { e.stopPropagation(); props.onSelect?.(props.icon, e); }}
             onDblClick={(e) => { e.stopPropagation(); props.onOpen(props.icon); }}
             onContextMenu={(e) => {
                 if (props.onNativeMenu) {
                     e.preventDefault();
                     e.stopPropagation();
-                    props.onSelect?.(props.icon);
                     props.onNativeMenu(props.icon);
                 }
             }}

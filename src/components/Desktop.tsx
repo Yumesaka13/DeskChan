@@ -7,20 +7,21 @@
 import { createSignal, onMount, onCleanup, createEffect, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import { useI18n } from '~/i18n';
 import type { DeskConfig } from '@bindings/DeskConfig';
 import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import { arrangeFreeIcons, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid } from '~/lib/grid';
+import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
 import { getCachedIcon } from '~/lib/icon-cache';
 import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2, FiFile, FiGrid } from 'solid-icons/fi';
+import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 export default function Desktop() {
@@ -28,7 +29,75 @@ export default function Desktop() {
     const [config, setConfig] = createSignal<DeskConfig | null>(null);
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [settingsOpen, setSettingsOpen] = createSignal(false);
-    const [selectedId, setSelectedId] = createSignal<string | null>(null);
+
+    // Multi-selection of free icons (marquee / ctrl+click), Windows-like
+    const [selectedIds, setSelectedIds] = createSignal<ReadonlySet<string>>(new Set());
+
+    // A drag that ends on the pressed icon still fires a trailing click,
+    // which would collapse the fresh multi-selection to one icon — swallow it.
+    let suppressNextClick = false;
+
+    /** Plain click selects exclusively; ctrl/meta+click toggles membership. */
+    const selectIcon = (ic: DIcon, e: MouseEvent) => {
+        if (suppressNextClick) {
+            suppressNextClick = false;
+            return;
+        }
+        setSelectedIds((prev) => {
+            if (e.ctrlKey || e.metaKey) {
+                const next = new Set(prev);
+                if (next.has(ic.id)) next.delete(ic.id);
+                else next.add(ic.id);
+                return next;
+            }
+            return new Set([ic.id]);
+        });
+    };
+
+    // ── Marquee (rubber-band) selection over free icons ──────────────────
+    const [marquee, setMarquee] = createSignal<
+        { x0: number; y0: number; x1: number; y1: number } | null
+    >(null);
+    let marqueeAdditive = false; // ctrl held at start → add to the selection
+    let marqueeBase: ReadonlySet<string> = new Set();
+
+    const handleDesktopMouseDown = (e: MouseEvent) => {
+        // Only start on the bare desktop background (button 0); icons and
+        // cells are absolutely-positioned children, so target ≠ currentTarget
+        if (e.button !== 0 || e.target !== e.currentTarget) return;
+        marqueeAdditive = e.ctrlKey || e.metaKey;
+        marqueeBase = selectedIds();
+        setMarquee({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY });
+        // Same guard as icon drags: the Rust polling loop must not re-order
+        // our window mid-gesture (it can break WebView2's pointer capture)
+        invoke('set_dragging', { dragging: true }).catch(() => {});
+
+        const move = (ev: MouseEvent) => {
+            const m = marquee();
+            if (!m) return; // cancelled (Escape) — mouseup will detach us
+            const next = { ...m, x1: ev.clientX, y1: ev.clientY };
+            setMarquee(next);
+            // Live selection while dragging, like Explorer
+            const hit = iconsInRect(
+                config()?.free_icons ?? [],
+                dragRect(next.x0, next.y0, next.x1, next.y1),
+            );
+            setSelectedIds(marqueeAdditive ? new Set([...marqueeBase, ...hit]) : new Set(hit));
+        };
+        const up = () => {
+            document.removeEventListener('mousemove', move);
+            document.removeEventListener('mouseup', up);
+            invoke('set_dragging', { dragging: false }).catch(() => {});
+            const m = marquee();
+            setMarquee(null);
+            // A sub-threshold drag is a plain empty-desktop click → clear
+            if (m && Math.abs(m.x1 - m.x0) < 4 && Math.abs(m.y1 - m.y0) < 4 && !marqueeAdditive) {
+                setSelectedIds(new Set<string>());
+            }
+        };
+        document.addEventListener('mousemove', move);
+        document.addEventListener('mouseup', up);
+    };
 
     // Hover-expand state lives here (not in CellBox) so it survives cell
     // component re-creation when the cell object is replaced by updateCell.
@@ -62,6 +131,9 @@ export default function Desktop() {
         startY: number;
         offsetX: number;
         offsetY: number;
+        /** Every icon moving together — the multi-selection for free-icon
+         *  drags, or just the dragged icon itself. */
+        group: DIcon[];
         /** Only becomes a real drag after a small movement threshold —
          *  otherwise plain clicks/double-clicks would trigger drop logic. */
         moved: boolean;
@@ -114,7 +186,10 @@ export default function Desktop() {
             if (e.key === 'Escape') {
                 setDragState(null);
                 setContextMenu(null);
-                setSelectedId(null);
+                // Cancel an active marquee too — its move handler bails once
+                // the signal is null, so the cleared selection stays cleared
+                setMarquee(null);
+                setSelectedIds(new Set<string>());
             }
         };
         window.addEventListener('keydown', onKey);
@@ -149,33 +224,71 @@ export default function Desktop() {
             const ds = dragState();
             if (!ds) return;
             if (!ds.moved) { clearDrag(); return; } // plain click, not a drag
+            suppressNextClick = true; // the trailing click must not reset the selection
             const targetCell = cellAtPoint(ds.x, ds.y);
+            // Re-resolve members from the CURRENT config — a watcher
+            // reconcile mid-drag may have replaced or removed icon objects,
+            // and re-adding stale snapshots could duplicate files.
+            const groupIds = new Set(
+                (ds.group.length > 0 ? ds.group : [ds.icon]).map((g) => g.id),
+            );
 
             if (targetCell && targetCell !== ds.cellId) {
-                setConfig((p) => p ? {
-                    ...p,
-                    free_icons: ds.source === 'free' ? p.free_icons.filter((i) => i.id !== ds.iconId) : p.free_icons,
-                    cells: p.cells.map((c) => {
-                        if (c.id === ds.cellId && ds.source === 'cell') return { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) };
-                        if (c.id === targetCell) return { ...c, icons: [...c.icons, ds.icon] };
-                        return c;
-                    }),
-                } : p);
+                // The whole selection drops into the cell together
+                setConfig((p) => {
+                    if (!p) return p;
+                    const live = ds.source === 'free'
+                        ? p.free_icons.filter((i) => groupIds.has(i.id))
+                        : [ds.icon];
+                    return {
+                        ...p,
+                        free_icons: ds.source === 'free' ? p.free_icons.filter((i) => !groupIds.has(i.id)) : p.free_icons,
+                        cells: p.cells.map((c) => {
+                            if (c.id === ds.cellId && ds.source === 'cell') return { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) };
+                            if (c.id === targetCell) return { ...c, icons: [...c.icons, ...live] };
+                            return c;
+                        }),
+                    };
+                });
             } else if (!targetCell) {
-                const pos = resolveDropPos(ds.x - ds.offsetX, ds.y - ds.offsetY, ds.iconId);
                 if (ds.source === 'cell') {
+                    const pos = resolveDropPos(ds.x - ds.offsetX, ds.y - ds.offsetY, ds.iconId);
                     setConfig((p) => p ? {
                         ...p,
                         cells: p.cells.map((c) => c.id === ds.cellId ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) } : c),
                         free_icons: [...p.free_icons, { ...ds.icon, pos_x: pos.x, pos_y: pos.y }],
                     } : p);
                 } else {
-                    setConfig((p) => p ? {
-                        ...p,
-                        free_icons: p.free_icons.map((i) => i.id === ds.iconId
-                            ? { ...i, pos_x: pos.x, pos_y: pos.y }
-                            : i),
-                    } : p);
+                    // Reposition: shift every group member by the drag delta,
+                    // then snap sequentially (occupied accumulates) so members
+                    // never stack onto the same slot. Positions come from the
+                    // live config, not the drag-start snapshot.
+                    const dx = ds.x - ds.startX;
+                    const dy = ds.y - ds.startY;
+                    setConfig((p) => {
+                        if (!p) return p;
+                        const cellRects = p.cells.map(effectiveCellRect);
+                        const occupied = p.free_icons
+                            .filter((i) => !groupIds.has(i.id) && i.pos_x >= 0)
+                            .map((i) => ({ x: i.pos_x, y: i.pos_y }));
+                        const movedPos = new Map<string, { x: number; y: number }>();
+                        for (const g of p.free_icons.filter((i) => groupIds.has(i.id))) {
+                            const nx = Math.max(0, g.pos_x + dx);
+                            const ny = Math.max(0, g.pos_y + dy);
+                            const pos = p.snap_to_grid
+                                ? nearestFreeSlot(nx, ny, occupied, cellRects, viewportSize())
+                                : { x: nx, y: ny };
+                            occupied.push(pos);
+                            movedPos.set(g.id, pos);
+                        }
+                        return {
+                            ...p,
+                            free_icons: p.free_icons.map((i) => {
+                                const m = movedPos.get(i.id);
+                                return m ? { ...i, pos_x: m.x, pos_y: m.y } : i;
+                            }),
+                        };
+                    });
                 }
             }
             clearDrag();
@@ -403,14 +516,81 @@ export default function Desktop() {
         }
     };
 
+    // ── Config data operations (settings dialog: export / import / reset) ──
+    const exportConfig = async () => {
+        const cfg = config();
+        if (!cfg) return;
+        try {
+            const dest = await save({
+                title: t('settings.export_title'),
+                defaultPath: 'deskchan.toml',
+                filters: [{ name: 'TOML', extensions: ['toml'] }],
+            });
+            if (!dest) return; // user cancelled
+            await invoke('export_config', { cfg, path: dest });
+            toast.success(t('toast.export_done'));
+        } catch {
+            toast.error(t('toast.export_failed'));
+        }
+    };
+
+    const importConfig = async () => {
+        try {
+            const src = await open({
+                title: t('settings.import_title'),
+                multiple: false,
+                filters: [{ name: 'TOML', extensions: ['toml'] }],
+            });
+            if (!src) return; // user cancelled
+            const path = typeof src === 'string' ? src : (src as { path: string }).path;
+            setConfig(await invoke<DeskConfig>('import_config', { path }));
+            await reconcileDesktop();
+            toast.success(t('toast.import_done'));
+        } catch {
+            toast.error(t('toast.import_failed'));
+        }
+    };
+
+    const resetConfig = async () => {
+        try {
+            // Destructive (removes all cells) → native confirm first
+            if (!(await ask(t('settings.reset_confirm'), { kind: 'warning' }))) return;
+            setConfig(await invoke<DeskConfig>('reset_config'));
+            await reconcileDesktop();
+            setSettingsOpen(false);
+            toast.success(t('toast.reset_done'));
+        } catch {
+            toast.error(t('toast.load_config_failed'));
+        }
+    };
+
     /** Native Windows shell context menu for an icon. For cell icons a
      *  "remove" entry is appended; free icons mirror real desktop files, so
-     *  the native verbs (delete, rename, …) plus the watcher cover them. */
+     *  the native verbs (delete, rename, …) plus the watcher cover them.
+     *  Right-clicking inside a multi-selection opens the combined menu for
+     *  all selected same-folder files (Explorer semantics); right-clicking
+     *  an unselected icon selects just it first. */
     const showIconMenu = async (icon: DIcon, cellId?: string) => {
+        let paths = [icon.path];
+        if (!cellId) {
+            if (selectedIds().has(icon.id) && selectedIds().size > 1) {
+                // The shell menu can only serve ONE parent folder (single
+                // IShellFolder); narrow the visible selection to the subset
+                // the menu will actually act on, so highlight === action.
+                const sameDir = (config()?.free_icons ?? [])
+                    .filter((i) => selectedIds().has(i.id) && sameParentDir(i.path, icon.path));
+                paths = sameDir.map((i) => i.path);
+                if (sameDir.length < selectedIds().size) {
+                    setSelectedIds(new Set(sameDir.map((i) => i.id)));
+                }
+            } else {
+                setSelectedIds(new Set([icon.id]));
+            }
+        }
         try {
             const extraItems = cellId ? [t('icon.remove')] : [];
             const picked = await invoke<number | null>('show_icon_menu', {
-                path: icon.path,
+                paths,
                 extraItems,
             });
             if (picked === 0 && cellId) {
@@ -449,7 +629,7 @@ export default function Desktop() {
             // 0.01 opacity prevents WebView2 from leaking drag to OS desktop.
             // 0.005 gets rounded to 0 by Chromium; 0.01 is the minimum safe value.
             style={{ "background-color": "rgba(255, 255, 255, 0.01)" }}
-            onClick={() => setSelectedId(null)}
+            onMouseDown={handleDesktopMouseDown}
             onContextMenu={(e) => {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY });
@@ -486,6 +666,7 @@ export default function Desktop() {
                                 startX: e.clientX, startY: e.clientY,
                                 offsetX: e.clientX - rect.left,
                                 offsetY: e.clientY - rect.top,
+                                group: [icon],
                                 moved: false,
                             });
                             invoke('set_dragging', { dragging: true }).catch(() => {});
@@ -498,7 +679,13 @@ export default function Desktop() {
                             updateCell(id, (c) => ({ ...c, collapsed: !c.collapsed }));
                         }}
                         onToggleHoverExpand={(id) =>
-                            updateCell(id, (c) => ({ ...c, hover_expand: !c.hover_expand }))
+                            // Coodesker semantics: entering auto mode arms the
+                            // roll-up (cell stays open under the hovering
+                            // pointer, rolls when it leaves); leaving auto
+                            // mode pins the cell open.
+                            updateCell(id, (c) => c.hover_expand
+                                ? { ...c, hover_expand: false, collapsed: false }
+                                : { ...c, hover_expand: true, collapsed: true })
                         }
                         onIconMenu={(cellId, icon) => { void showIconMenu(icon, cellId); }}
                         showTitles={config()?.show_titles ?? true}
@@ -527,12 +714,21 @@ export default function Desktop() {
                     >
                         <DesktopIconComponent
                             icon={icon}
-                            selected={selectedId() === icon.id}
-                            onSelect={(ic) => setSelectedId(ic.id)}
+                            selected={selectedIds().has(icon.id)}
+                            onSelect={selectIcon}
                             onOpen={openIcon}
                             onNativeMenu={(ic) => { void showIconMenu(ic); }}
                             labelClass="desktop-icon-label"
                             onDragStart={(iconId, e) => {
+                                // Pointer-down on an unselected icon selects it
+                                // exclusively (Windows); on a selected one the
+                                // whole selection drags as a group. Ctrl-clicks
+                                // leave selection to the click handler.
+                                if (!(e.ctrlKey || e.metaKey) && !selectedIds().has(iconId)) {
+                                    setSelectedIds(new Set([iconId]));
+                                }
+                                const group = (config()?.free_icons ?? [])
+                                    .filter((i) => selectedIds().has(i.id) || i.id === iconId);
                                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                 setDragState({
                                     iconId, source: 'free', cellId: '', icon,
@@ -540,6 +736,7 @@ export default function Desktop() {
                                     startX: e.clientX, startY: e.clientY,
                                     offsetX: e.clientX - rect.left,
                                     offsetY: e.clientY - rect.top,
+                                    group,
                                     moved: false,
                                 });
                                 invoke('set_dragging', { dragging: true }).catch(() => {});
@@ -619,22 +816,6 @@ export default function Desktop() {
                             onClick: () => { void organizeDesktop(); },
                         },
                         {
-                            label: t('desktop.context.reset'),
-                            icon: <FiTrash2 />,
-                            destructive: true,
-                            onClick: async () => {
-                                try {
-                                    // Bug fix: the returned config was ignored before, so
-                                    // reset never updated the UI. Apply it, then reconcile
-                                    // to assign grid slots to the fresh (sentinel) icons.
-                                    setConfig(await invoke<DeskConfig>('reset_config'));
-                                    await reconcileDesktop();
-                                } catch {
-                                    toast.error(t('toast.load_config_failed'));
-                                }
-                            },
-                        },
-                        {
                             label: t('desktop.context.exit'),
                             icon: <FiPower />,
                             destructive: true,
@@ -656,7 +837,30 @@ export default function Desktop() {
                 onSave={({ showTitles }) =>
                     setConfig((p) => (p ? { ...p, show_titles: showTitles } : p))
                 }
+                onExport={() => { void exportConfig(); }}
+                onImport={() => { void importConfig(); }}
+                onReset={() => { void resetConfig(); }}
             />
+
+            {/* Marquee rectangle — theme-aware, render only past the click threshold */}
+            <Show when={marquee()}>
+                {(m) => {
+                    const r = () => dragRect(m().x0, m().y0, m().x1, m().y1);
+                    return (
+                        <Show when={r().width >= 4 || r().height >= 4}>
+                            <div
+                                class="absolute z-40 pointer-events-none rounded-sm border border-blue-500/70 bg-blue-500/10 dark:border-blue-300/60 dark:bg-blue-300/10"
+                                style={{
+                                    left: `${r().x}px`,
+                                    top: `${r().y}px`,
+                                    width: `${r().width}px`,
+                                    height: `${r().height}px`,
+                                }}
+                            />
+                        </Show>
+                    );
+                }}
+            </Show>
 
             {/* Drag ghost — follows cursor once the drag threshold is passed */}
             <Show when={dragState()}>
@@ -681,6 +885,12 @@ export default function Desktop() {
                             <span class="text-xs text-center leading-tight line-clamp-2 max-w-full desktop-icon-label">
                                 {ds().icon.name}
                             </span>
+                            {/* Group size badge, like Explorer's drag count */}
+                            <Show when={ds().group.length > 1}>
+                                <span class="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-brand-primary text-white text-[10px] flex items-center justify-center tabular-nums">
+                                    {ds().group.length}
+                                </span>
+                            </Show>
                         </div>
                     </Show>
                 )}
