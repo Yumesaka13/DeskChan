@@ -31,6 +31,15 @@ export interface Translations {
     'desktop.context.reset': string;
     'desktop.context.exit': string;
 
+    // Organize categories (cell titles)
+    'organize.folders': string;
+    'organize.apps': string;
+    'organize.documents': string;
+    'organize.images': string;
+    'organize.media': string;
+    'organize.archives': string;
+    'organize.others': string;
+
     // Toast messages
     'toast.load_config_failed': string;
     'toast.open_file_failed': string;
@@ -82,6 +91,14 @@ export const zhCN: Translations = {
     'desktop.context.arrange_snap': '对齐到网格',
     'desktop.context.reset': '重置配置',
     'desktop.context.exit': '退出 DeskChan',
+
+    'organize.folders': '文件夹',
+    'organize.apps': '应用',
+    'organize.documents': '文档',
+    'organize.images': '图片',
+    'organize.media': '影音',
+    'organize.archives': '压缩包',
+    'organize.others': '其他',
 
     'toast.load_config_failed': '加载配置失败',
     'toast.open_file_failed': '打开文件失败',

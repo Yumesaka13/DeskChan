@@ -2,10 +2,13 @@
  * CellBox — a draggable, resizable desktop cell (fence/box) that holds icons.
  * Drag the cell by its title bar or empty area.
  * Drop external icons onto the cell to add them.
+ * Double-click the title bar to roll the cell up to its title (Coodesker
+ * style) — the collapsed state is persisted in the config.
  */
-import { createSignal, createMemo, onMount, onCleanup, For, type JSX } from 'solid-js';
+import { createSignal, createMemo, onMount, onCleanup, For } from 'solid-js';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
+import { CELL_TITLEBAR_H } from '~/lib/grid';
 import { type Cell } from '@bindings/Cell';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import DesktopIconComponent from './DesktopIcon';
@@ -29,6 +32,8 @@ export interface CellBoxProps {
     onMoveIcon?: (iconId: string, targetCellId: string) => void;
     /** Called when an icon starts being dragged (pointer-event simulated) */
     onDragStart?: (iconId: string, cellId: string, icon: DesktopIconData, e: PointerEvent) => void;
+    /** Called to toggle the persisted collapsed state */
+    onToggleCollapse: (id: string) => void;
     /** Called to delete the cell */
     onDelete: (id: string) => void;
     /** Called to request adding icons via file dialog */
@@ -53,7 +58,9 @@ export default function CellBox(props: CellBoxProps) {
     const { t } = useI18n();
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [isDragging, setIsDragging] = createSignal(false);
-    const [collapsed, setCollapsed] = createSignal(false);
+    // Live-resize must bypass the height transition, or the cell lags the cursor
+    const [isResizing, setIsResizing] = createSignal(false);
+    const collapsed = () => props.cell.collapsed;
 
     let cellRef!: HTMLDivElement;
     let dragOffset = { x: 0, y: 0 };
@@ -199,35 +206,47 @@ export default function CellBox(props: CellBoxProps) {
                 class={cn(
                     'glass-panel deskchan-no-select',
                     'absolute flex flex-col overflow-hidden',
-                    'min-w-[120px] min-h-[80px]',
+                    'min-w-[120px]',
+                    !collapsed() && 'min-h-[80px]',
                     isDragging() && 'cursor-grabbing shadow-2xl',
-                    'transition-shadow duration-150',
+                    // Smooth Coodesker-style roll-up/down (height) + shadow.
+                    // Disabled during live resize so the cell tracks the cursor.
+                    !isResizing() && 'cell-height-anim',
                     props.class,
                 )}
                 style={{
                     left: `${props.cell.rect.x}px`,
                     top: `${props.cell.rect.y}px`,
                     width: `${props.cell.rect.width}px`,
-                    ...(collapsed() ? {} : { height: `${props.cell.rect.height}px` }),
+                    height: `${collapsed() ? CELL_TITLEBAR_H : props.cell.rect.height}px`,
                     ...bgStyle(),
                 }}
                 onMouseDown={handleMouseDown}
                 onContextMenu={handleContextMenu}
             >
-                {/* Title bar */}
+                {/* Title bar — double-click rolls the cell up/down */}
                 <div
                     class={cn(
-                        'flex items-center gap-2 px-3 py-1.5',
+                        'flex items-center gap-2 px-3',
                         'text-xs font-medium text-gray-500 dark:text-gray-400',
-                        'cursor-grab border-b border-gray-200/50 dark:border-gray-600/30',
-                        'flex-shrink-0',
+                        'cursor-grab flex-shrink-0',
+                        !collapsed() && 'border-b border-gray-200/50 dark:border-gray-600/30',
                         props.titleClass,
                     )}
+                    style={{ height: `${CELL_TITLEBAR_H}px` }}
                     onMouseDown={handleMouseDown}
+                    onDblClick={() => props.onToggleCollapse(props.cell.id)}
                 >
                     <span class="flex-1 truncate">{props.cell.title}</span>
+                    {/* Icon count badge — visible when rolled up */}
+                    {collapsed() && (
+                        <span class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums">
+                            {props.cell.icons.length}
+                        </span>
+                    )}
                     <button
-                        onClick={() => setCollapsed((v) => !v)}
+                        onClick={(e) => { e.stopPropagation(); props.onToggleCollapse(props.cell.id); }}
+                        onDblClick={(e) => e.stopPropagation()}
                         class={cn(
                             'p-0.5 rounded hover:bg-gray-200/60 dark:hover:bg-gray-600/40',
                             'transition-transform duration-200',
@@ -239,39 +258,38 @@ export default function CellBox(props: CellBoxProps) {
                     </button>
                 </div>
 
-                {/* Icon area — hidden when collapsed */}
-                {!collapsed() && (
-                    <div
-                        class={cn(
-                            'flex-1 overflow-y-auto p-2 cell-scrollbar',
-                            props.cell.layout === 'Grid'
-                                ? 'flex flex-wrap content-start gap-1'
-                                : 'flex flex-col gap-0.5',
-                            props.contentClass,
-                        )}
-                    >
-                        {props.cell.icons.length === 0 ? (
-                            <div class="flex items-center justify-center h-full text-xs text-gray-400 dark:text-gray-500 italic">
-                                {t('cell.empty_hint')}
-                            </div>
-                        ) : (
-                            <For each={props.cell.icons}>
-                                {(icon) => (
-                                    <div data-icon>
-                                        <DesktopIconComponent
-                                            icon={icon}
-                                            onOpen={props.onOpenIcon}
-                                            onRemove={(ic) => props.onRemoveIcon(props.cell.id, ic.id)}
-                                            onDragStart={props.onDragStart
-                                                ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
-                                                : undefined}
-                                        />
-                                    </div>
-                                )}
-                            </For>
-                        )}
-                    </div>
-                )}
+                {/* Icon area — stays mounted while collapsed (clipped by the
+                    animated container height) so expanding is instant */}
+                <div
+                    class={cn(
+                        'flex-1 overflow-y-auto p-2 cell-scrollbar',
+                        props.cell.layout === 'Grid'
+                            ? 'flex flex-wrap content-start gap-1'
+                            : 'flex flex-col gap-0.5',
+                        props.contentClass,
+                    )}
+                >
+                    {props.cell.icons.length === 0 ? (
+                        <div class="flex items-center justify-center h-full text-xs text-gray-400 dark:text-gray-500 italic">
+                            {t('cell.empty_hint')}
+                        </div>
+                    ) : (
+                        <For each={props.cell.icons}>
+                            {(icon) => (
+                                <div data-icon>
+                                    <DesktopIconComponent
+                                        icon={icon}
+                                        onOpen={props.onOpenIcon}
+                                        onRemove={(ic) => props.onRemoveIcon(props.cell.id, ic.id)}
+                                        onDragStart={props.onDragStart
+                                            ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
+                                            : undefined}
+                                    />
+                                </div>
+                            )}
+                        </For>
+                    )}
+                </div>
 
                 {/* Resize handle — hidden when collapsed */}
                 {!collapsed() && (
@@ -284,6 +302,7 @@ export default function CellBox(props: CellBoxProps) {
                         onMouseDown={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
+                        setIsResizing(true);
                         const startX = e.clientX;
                         const startY = e.clientY;
                         const startW = props.cell.rect.width;
@@ -296,6 +315,7 @@ export default function CellBox(props: CellBoxProps) {
                         };
 
                         const handleMouseUp = () => {
+                            setIsResizing(false);
                             document.removeEventListener('mousemove', handleMouseMove);
                             document.removeEventListener('mouseup', handleMouseUp);
                         };

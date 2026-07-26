@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 import UnoCSS from 'unocss/vite';
@@ -5,6 +6,11 @@ import path from 'node:path';
 
 export default defineConfig({
   plugins: [UnoCSS(), solid()],
+  test: {
+    // Pure-logic tests only — vite-plugin-solid would otherwise default to
+    // jsdom, which is not installed. Switch when component tests appear.
+    environment: 'node',
+  },
   resolve: {
     alias: {
       '~': path.resolve(__dirname, 'src'),

@@ -11,6 +11,7 @@ import type { JSX as SolidJSX } from 'solid-js';
 
 declare global {
     namespace JSX {
+        // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- re-exports Solid's JSX elements into the global namespace
         interface IntrinsicElements extends SolidJSX.IntrinsicElements {}
     }
 

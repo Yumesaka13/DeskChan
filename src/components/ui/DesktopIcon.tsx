@@ -1,38 +1,26 @@
 /**
- * DesktopIcon — file shortcut inside a cell.
+ * DesktopIcon — a single file icon, used both free on the desktop and inside
+ * cells. Native-like behavior: single click selects, double click opens.
  *
- * Fetches the real system file icon via Rust's SHGetFileInfoW.
- * Uses SolidJS `createResource` (the reactive hook for async data)
- * so the icon URL survives component re-renders triggered by config changes.
- * Results are cached globally to avoid redundant IPC calls.
+ * The shell icon comes from Rust (256/48px source, see icon-cache) and is
+ * displayed at 48px CSS like Windows' medium icons — downscaling a large
+ * source keeps it crisp at any DPI. `createResource` keeps the icon URL
+ * across SolidJS re-renders triggered by config changes.
  */
 import { createResource, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
+import { fetchIcon } from '~/lib/icon-cache';
 import type { DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import { FiFile, FiX } from 'solid-icons/fi';
 
-// ── Global icon cache ──────────────────────────────────────────────────────
-
-const iconCache = new Map<string, string>();
-const pendingRequests = new Map<string, Promise<string>>();
-
-async function fetchIcon(path: string): Promise<string> {
-    if (iconCache.has(path)) return iconCache.get(path)!;
-    if (pendingRequests.has(path)) return pendingRequests.get(path)!;
-    const promise = invoke<string>('get_file_icon', { path })
-        .then((url) => { iconCache.set(path, url); pendingRequests.delete(path); return url; })
-        .catch(() => { pendingRequests.delete(path); return ''; });
-    pendingRequests.set(path, promise);
-    return promise;
-}
-
-// ── Component ──────────────────────────────────────────────────────────────
-
 export interface DesktopIconProps {
     icon: DesktopIconData;
+    /** Double-click (native behavior) — opens the file */
     onOpen: (icon: DesktopIconData) => void;
+    /** Single click — select */
+    onSelect?: (icon: DesktopIconData) => void;
+    selected?: boolean;
     onRemove?: (icon: DesktopIconData) => void;
     onDragStart?: (iconId: string, e: PointerEvent) => void;
     class?: string;
@@ -40,50 +28,49 @@ export interface DesktopIconProps {
     labelClass?: string;
 }
 
-/**
- * `createResource` produces a reactive signal from an async fetcher.
- * The signal persists across SolidJS re-renders — unlike DOM refs which
- * get clobbered when JSX re-evaluates `src=""`.
- */
 export default function DesktopIcon(props: DesktopIconProps) {
     const { t } = useI18n();
     const [iconUrl] = createResource(() => props.icon.path, fetchIcon);
 
-    const name = props.icon.name;
-    const truncated = name.length > 12 ? name.slice(0, 10) + '\u2026' : name;
-
     return (
         <div
             class={cn(
-                'flex flex-col items-center gap-0.5 p-1.5 rounded-lg',
-                'cursor-pointer select-none',
-                'hover:bg-white/40 dark:hover:bg-gray-700/40',
+                'flex flex-col items-center gap-0.5 p-1 rounded',
+                'cursor-default select-none',
+                'border border-transparent',
+                'hover:bg-blue-400/15 hover:border-blue-300/20',
+                props.selected && 'bg-blue-400/30 border-blue-300/40',
                 'w-18 group relative',
                 props.class,
             )}
-            onClick={(e) => { e.stopPropagation(); props.onOpen(props.icon); }}
+            onClick={(e) => { e.stopPropagation(); props.onSelect?.(props.icon); }}
+            onDblClick={(e) => { e.stopPropagation(); props.onOpen(props.icon); }}
             onPointerDown={(e) => {
-                if (props.onDragStart) {
+                if (props.onDragStart && e.button === 0) {
                     e.preventDefault();
                     props.onDragStart(props.icon.id, e);
                 }
             }}
             title={props.icon.name}
         >
-            <div class={cn('w-10 h-10 flex items-center justify-center overflow-hidden', props.iconClass)}>
-                <Show when={iconUrl()} fallback={<FiFile class="text-xl text-gray-400 dark:text-gray-500" />}>
-                    {/* 32px source → 16px CSS display for crisp HiDPI downsampling */}
+            <div class={cn('w-12 h-12 flex items-center justify-center overflow-hidden', props.iconClass)}>
+                <Show when={iconUrl()} fallback={<FiFile class="text-3xl text-gray-400 dark:text-gray-500" />}>
                     <img
                         src={iconUrl()!}
                         alt=""
-                        class="w-4 h-4 object-contain"
-                        style="image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges;"
+                        class="w-full h-full object-contain"
                         draggable="false"
                     />
                 </Show>
             </div>
-            <span class={cn('text-xs text-center text-gray-700 dark:text-gray-200 leading-tight break-all max-w-full line-clamp-2', props.labelClass)}>
-                {truncated}
+            <span
+                class={cn(
+                    'text-xs text-center leading-tight break-words line-clamp-2 max-w-full',
+                    'text-gray-700 dark:text-gray-200',
+                    props.labelClass,
+                )}
+            >
+                {props.icon.name}
             </span>
             {props.onRemove && (
                 <button

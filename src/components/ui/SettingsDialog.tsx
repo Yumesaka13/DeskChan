@@ -27,7 +27,7 @@ export interface SettingsDialogProps {
  */
 export default function SettingsDialog(props: SettingsDialogProps) {
     const { t, locale, setLocale } = useI18n();
-    const { theme, setTheme, resolvedTheme } = useTheme();
+    const { theme, setTheme } = useTheme();
     const [showTitles, setShowTitles] = createSignal(props.showTitles);
 
     const handleSave = () => {

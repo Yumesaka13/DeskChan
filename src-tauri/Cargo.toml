@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["v4"] }
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
+notify = "8"
 
 [target.'cfg(windows)'.dependencies]
 # No external crate needed — we use raw Win32 FFI in window_manager.rs

@@ -28,6 +28,14 @@ export const enUS: Translations = {
     'desktop.context.reset': 'Reset Config',
     'desktop.context.exit': 'Exit DeskChan',
 
+    'organize.folders': 'Folders',
+    'organize.apps': 'Apps',
+    'organize.documents': 'Documents',
+    'organize.images': 'Pictures',
+    'organize.media': 'Media',
+    'organize.archives': 'Archives',
+    'organize.others': 'Others',
+
     'toast.load_config_failed': 'Failed to load configuration',
     'toast.open_file_failed': 'Failed to open file',
     'toast.organize_failed': 'Failed to organize',

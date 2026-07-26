@@ -60,6 +60,9 @@ pub struct Cell {
     pub opacity: f64,
     /// Layout mode for icons inside this cell
     pub layout: CellLayout,
+    /// Rolled up to the title bar only (Coodesker-style double-click collapse)
+    #[serde(default)]
+    pub collapsed: bool,
     /// Icons contained within this cell
     pub icons: Vec<DesktopIcon>,
 }
@@ -100,6 +103,30 @@ impl Default for DeskConfig {
             theme: "auto".to_string(),
         }
     }
+}
+
+/// A single desktop directory entry, as returned by `scan_desktop`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../bindings/")]
+pub struct DesktopEntry {
+    /// Absolute path of the file / folder
+    pub path: String,
+    /// Whether the entry is a directory (affects display-name derivation)
+    pub is_dir: bool,
+}
+
+/// Result of scanning the desktop folders. `dirs` lets the frontend decide
+/// which config icons are desktop-owned (and thus subject to auto-removal
+/// when the underlying file disappears).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../bindings/")]
+pub struct DesktopScan {
+    /// The scanned desktop folders (user + public)
+    pub dirs: Vec<String>,
+    /// All visible entries across those folders
+    pub entries: Vec<DesktopEntry>,
 }
 
 /// Load config from a TOML file path.

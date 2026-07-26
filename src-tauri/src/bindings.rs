@@ -1,4 +1,5 @@
-use crate::config::{self, DeskConfig};
+use crate::config::{self, DeskConfig, DesktopEntry, DesktopScan};
+use crate::desktop;
 use crate::window_manager::DeskState;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,19 +8,6 @@ use tauri::Manager;
 
 fn config_path(app: &tauri::AppHandle) -> PathBuf {
     app.path().app_data_dir().expect("app data dir").join("deskchan.toml")
-}
-
-fn desktop_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(profile) = std::env::var("USERPROFILE") {
-            return PathBuf::from(profile).join("Desktop");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join("Desktop");
-    }
-    PathBuf::from(".")
 }
 
 #[tauri::command] pub fn get_config(app: tauri::AppHandle) -> Result<DeskConfig, String> { config::load_config(&config_path(&app)).map_err(|e| e.to_string()) }
@@ -37,80 +25,51 @@ pub fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Re-scan desktop, preserve cells, reset free_icons to current desktop files.
+/// Scan the desktop folders (user + public). The frontend reconciles the
+/// result with its config: adds entries not yet known, removes desktop-owned
+/// icons whose file disappeared. No config file I/O here — avoids save races
+/// with the frontend's debounced save.
+#[tauri::command]
+pub fn scan_desktop() -> DesktopScan {
+    DesktopScan {
+        dirs: desktop::desktop_dirs()
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect(),
+        entries: desktop::list_entries()
+            .into_iter()
+            .map(|(path, is_dir)| DesktopEntry { path: path.to_string_lossy().to_string(), is_dir })
+            .collect(),
+    }
+}
+
+/// Re-scan the desktop, preserve cells, rebuild free_icons from current
+/// desktop files. Files already living in a cell are skipped (the old
+/// version duplicated them as free icons). Positions use the -1 sentinel:
+/// the frontend assigns free grid slots on the next reconcile.
 #[tauri::command]
 pub fn reset_config(app: tauri::AppHandle) -> Result<DeskConfig, String> {
     let cfg_path = config_path(&app);
     // Load existing config to preserve cells; if missing, start fresh
     let mut cfg = config::load_config(&cfg_path).unwrap_or_default();
-    cfg.free_icons.clear();
-    let desktop = desktop_dir();
-    if let Ok(entries) = std::fs::read_dir(&desktop) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
-            if name.starts_with('.') || name.eq_ignore_ascii_case("desktop.ini") { continue; }
-            let display = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_string();
-            cfg.free_icons.push(config::DesktopIcon {
-                id: uuid::Uuid::new_v4().to_string(), name: display,
-                path: path.to_string_lossy().to_string(),
-                icon_path: None, pos_x: 0.0, pos_y: 0.0,
-            });
-        }
-    }
+    let in_cells: std::collections::HashSet<String> = cfg
+        .cells
+        .iter()
+        .flat_map(|c| c.icons.iter().map(|i| i.path.to_lowercase()))
+        .collect();
+    cfg.free_icons = desktop::list_entries()
+        .into_iter()
+        .filter(|(path, _)| !in_cells.contains(&path.to_string_lossy().to_lowercase()))
+        .map(|(path, is_dir)| desktop::make_icon(&path, is_dir))
+        .collect();
     config::save_config(&cfg_path, &cfg).map_err(|e| e.to_string())?;
     Ok(cfg)
-}
-
-/// Organize all free-floating icons into categorized cells (Folders / Apps / Files).
-#[tauri::command]
-pub fn organize_icons(app: tauri::AppHandle) -> Result<DeskConfig, String> {
-    let cfg_path = config_path(&app);
-    let mut cfg: DeskConfig = config::load_config(&cfg_path).map_err(|e| e.to_string())?;
-
-    let (folders, apps, files) = partition_icons(&cfg.free_icons);
-    cfg.free_icons.clear();
-
-    let mut cells = Vec::new();
-    if !folders.is_empty() {
-        cells.push(make_cell("Folders", 50.0, 50.0, folders));
-    }
-    if !apps.is_empty() {
-        let x = if cells.is_empty() { 50.0 } else { 420.0 };
-        cells.push(make_cell("Applications", x, 50.0, apps));
-    }
-    if !files.is_empty() {
-        let x = 50.0 + (cells.len() as f64) * 370.0;
-        cells.push(make_cell("Files", x, 50.0, files));
-    }
-    cfg.cells = cells;
-    cfg.version = 3;
-
-    config::save_config(&cfg_path, &cfg).map_err(|e| e.to_string())?;
-    Ok(cfg)
-}
-
-/// Return all file paths currently on the desktop. JS compares with free_icons
-/// to add new ones — no config file I/O involved, avoiding save races.
-#[tauri::command]
-pub fn scan_desktop_files() -> Result<Vec<String>, String> {
-    let desktop = desktop_dir();
-    let mut paths = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&desktop) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() || path.extension().is_some() {
-                paths.push(path.to_string_lossy().to_string());
-            }
-        }
-    }
-    Ok(paths)
 }
 
 /// Copy a file to the desktop folder and return its new path.
 #[tauri::command]
 pub fn copy_to_desktop(path: String) -> Result<String, String> {
-    let desktop = desktop_dir();
+    let desktop = desktop::user_desktop_dir();
     let source = std::path::Path::new(&path);
     let filename = source.file_name().ok_or("invalid source")?;
     let dest = desktop.join(filename);
@@ -129,42 +88,5 @@ pub fn copy_to_desktop(path: String) -> Result<String, String> {
     Ok(dest.to_string_lossy().to_string())
 }
 
-/// Toggle arrangement flags for free icons.
-#[tauri::command]
-pub fn set_arrangement(app: tauri::AppHandle, auto_arrange: bool, snap_to_grid: bool) -> Result<DeskConfig, String> {
-    let cfg_path = config_path(&app);
-    let mut cfg: DeskConfig = config::load_config(&cfg_path).map_err(|e| e.to_string())?;
-    cfg.auto_arrange = auto_arrange;
-    cfg.snap_to_grid = snap_to_grid;
-    config::save_config(&cfg_path, &cfg).map_err(|e| e.to_string())?;
-    Ok(cfg)
-}
-
-fn partition_icons(icons: &[config::DesktopIcon]) -> (Vec<config::DesktopIcon>, Vec<config::DesktopIcon>, Vec<config::DesktopIcon>) {
-    let mut folders = Vec::new();
-    let mut apps = Vec::new();
-    let mut files = Vec::new();
-    for icon in icons {
-        let path = std::path::Path::new(&icon.path);
-        if path.is_dir() {
-            folders.push(icon.clone());
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if config::is_app_extension(ext) { apps.push(icon.clone()); } else { files.push(icon.clone()); }
-        } else {
-            files.push(icon.clone());
-        }
-    }
-    (folders, apps, files)
-}
-
-fn make_cell(title: &str, x: f64, y: f64, icons: Vec<config::DesktopIcon>) -> config::Cell {
-    config::Cell {
-        id: uuid::Uuid::new_v4().to_string(),
-        title: title.to_string(),
-        rect: config::CellRect { x, y, width: 320.0, height: 280.0 },
-        background_color: None,
-        opacity: 0.85,
-        layout: config::CellLayout::Grid,
-        icons,
-    }
-}
+// Note: one-click organize lives in TS (src/lib/organize.ts) — it needs
+// i18n cell titles and viewport-aware layout, which only the frontend has.

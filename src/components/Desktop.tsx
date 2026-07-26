@@ -1,46 +1,87 @@
 /**
  * Desktop main application surface.
- * Manages cells, drag-and-drop, right-click menu, config persistence,
- * and reports cell regions to Rust for click-through cursor polling.
+ * Manages cells, free icons on a Windows-like grid, drag-and-drop,
+ * right-click menu, config persistence, and reconciles the icon list with
+ * the real desktop folder (initial load + `desktop-changed` watcher events).
  */
 import { createSignal, onMount, onCleanup, createEffect, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useI18n } from '~/i18n';
 import type { DeskConfig } from '@bindings/DeskConfig';
+import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
+import { arrangeFreeIcons, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid } from '~/lib/grid';
+import { organizeConfig, type CategoryKey } from '~/lib/organize';
+import { getCachedIcon } from '~/lib/icon-cache';
 import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
-import ContextMenu, { type MenuItem } from './ui/ContextMenu';
+import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
 import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiTrash2, FiFile, FiGrid } from 'solid-icons/fi';
 import toast from 'solid-toast';
-
-/** Shape of Tauri v2 drag-drop event payload. */
-interface DragDropPayload {
-    type: string;
-    paths?: string[];
-    position?: { x: number; y: number };
-}
 
 export default function Desktop() {
     const { t } = useI18n();
     const [config, setConfig] = createSignal<DeskConfig | null>(null);
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [settingsOpen, setSettingsOpen] = createSignal(false);
+    const [selectedId, setSelectedId] = createSignal<string | null>(null);
+
+    const viewportSize = () => ({ width: window.innerWidth, height: window.innerHeight });
 
     // ── Pointer-event simulated drag state ───────────────────────────────
-    interface DragState { iconId: string; source: 'cell' | 'free'; cellId: string; icon: DIcon; x: number; y: number; offsetX: number; offsetY: number; }
+    interface DragState {
+        iconId: string;
+        source: 'cell' | 'free';
+        cellId: string;
+        icon: DIcon;
+        x: number;
+        y: number;
+        startX: number;
+        startY: number;
+        offsetX: number;
+        offsetY: number;
+        /** Only becomes a real drag after a small movement threshold —
+         *  otherwise plain clicks/double-clicks would trigger drop logic. */
+        moved: boolean;
+    }
     const [dragState, setDragState] = createSignal<DragState | null>(null);
 
-    // ── Load config ──────────────────────────────────────────────────────
+    // ── Desktop ⇄ config reconcile ───────────────────────────────────────
+    // Core of auto-refresh: scan the real desktop folders and sync the
+    // config (add new files into free slots, drop deleted ones). Triggered
+    // on mount, by the Rust folder watcher, and by the Refresh menu item.
+    const reconcileDesktop = async () => {
+        try {
+            const scan = await invoke<DesktopScan>('scan_desktop');
+            setConfig((p) => {
+                if (!p) return p;
+                const next = reconcileConfig(p, scan, viewportSize());
+                // Auto-arrange compacts the layout on every desktop change
+                return p.auto_arrange && next !== p ? arrangeFreeIcons(next, viewportSize()) : next;
+            });
+        } catch {
+            /* scan is best-effort; manual refresh can retry */
+        }
+    };
+
+    // ── Load config, initial reconcile, watcher subscription ────────────
     onMount(async () => {
         try {
             setConfig(await invoke<DeskConfig>('get_config'));
         } catch {
             toast.error(t('toast.load_config_failed'));
+            return;
         }
+        void reconcileDesktop();
+    });
+
+    onMount(() => {
+        const unlisten = listen('desktop-changed', () => { void reconcileDesktop(); });
+        onCleanup(() => { void unlisten.then((fn) => fn()); });
     });
 
     // ── Keyboard shortcuts: context menu + cancel drag ───────────────────
@@ -51,10 +92,11 @@ export default function Desktop() {
                 e.preventDefault();
                 setContextMenu({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
             }
-            // Escape → cancel drag / close menu
+            // Escape → cancel drag / close menu / clear selection
             if (e.key === 'Escape') {
                 setDragState(null);
                 setContextMenu(null);
+                setSelectedId(null);
             }
         };
         window.addEventListener('keydown', onKey);
@@ -77,23 +119,19 @@ export default function Desktop() {
                 // Reset timeout on each move — if no move for 2s, auto-cancel
                 if (dragTimer) clearTimeout(dragTimer);
                 dragTimer = setTimeout(clearDrag, 2000);
-                return { ...prev, x: e.clientX, y: e.clientY };
+                const moved = prev.moved
+                    || Math.abs(e.clientX - prev.startX) > 4
+                    || Math.abs(e.clientY - prev.startY) > 4;
+                return { ...prev, x: e.clientX, y: e.clientY, moved };
             });
-        };
-
-        const snapPos = (x: number, y: number) => {
-            // Grid cell: ~80px wide, ~90px tall (icon + gap)
-            const cx = Math.round(x / 80) * 80;
-            const cy = Math.round(y / 90) * 90;
-            return { pos_x: Math.max(0, cx), pos_y: Math.max(0, cy) };
         };
 
         const onEnd = () => {
             if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
             const ds = dragState();
             if (!ds) return;
+            if (!ds.moved) { clearDrag(); return; } // plain click, not a drag
             const targetCell = cellAtPoint(ds.x, ds.y);
-            const snap = (x: number, y: number) => (config()?.snap_to_grid ? snapPos(x, y) : { pos_x: x, pos_y: y });
 
             if (targetCell && targetCell !== ds.cellId) {
                 setConfig((p) => p ? {
@@ -105,19 +143,22 @@ export default function Desktop() {
                         return c;
                     }),
                 } : p);
-            } else if (!targetCell && ds.source === 'cell') {
-                setConfig((p) => p ? {
-                    ...p,
-                    cells: p.cells.map((c) => c.id === ds.cellId ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) } : c),
-                    free_icons: [...p.free_icons, { ...ds.icon, ...snap(ds.x - ds.offsetX, ds.y - ds.offsetY) }],
-                } : p);
-            } else if (!targetCell && ds.source === 'free') {
-                setConfig((p) => p ? {
-                    ...p,
-                    free_icons: p.free_icons.map((i) => i.id === ds.iconId
-                        ? { ...i, ...snap(ds.x - ds.offsetX, ds.y - ds.offsetY) }
-                        : i),
-                } : p);
+            } else if (!targetCell) {
+                const pos = resolveDropPos(ds.x - ds.offsetX, ds.y - ds.offsetY, ds.iconId);
+                if (ds.source === 'cell') {
+                    setConfig((p) => p ? {
+                        ...p,
+                        cells: p.cells.map((c) => c.id === ds.cellId ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) } : c),
+                        free_icons: [...p.free_icons, { ...ds.icon, pos_x: pos.x, pos_y: pos.y }],
+                    } : p);
+                } else {
+                    setConfig((p) => p ? {
+                        ...p,
+                        free_icons: p.free_icons.map((i) => i.id === ds.iconId
+                            ? { ...i, pos_x: pos.x, pos_y: pos.y }
+                            : i),
+                    } : p);
+                }
             }
             clearDrag();
         };
@@ -155,7 +196,7 @@ export default function Desktop() {
             p ? { ...p, cells: p.cells.map((c) => (c.id === id ? fn(c) : c)) } : p,
         );
 
-    /** Create an icon entry and add it to a cell (no file movement �?just config). */
+    /** Create an icon entry and add it to a cell (no file movement — just config). */
     const addIconToCell = (cellId: string, filePath: string) => {
         const icon: DIcon = {
             id: crypto.randomUUID(),
@@ -196,69 +237,72 @@ export default function Desktop() {
         }
     };
 
-    /** Find the cell containing an icon by its ID. */
-    const findIconCell = (iconId: string): { cellId: string; icon: DIcon } | null => {
-        const cfg = config();
-        if (!cfg) return null;
-        for (const cell of cfg.cells) {
-            const icon = cell.icons.find((i) => i.id === iconId);
-            if (icon) return { cellId: cell.id, icon };
-        }
-        return null;
-    };
-    /** Find which cell (if any) is at the given coordinates. */
+    /** Find which cell (if any) is at the given coordinates.
+     *  Collapsed cells only occupy their title bar. */
     const cellAtPoint = (x: number, y: number): string | null => {
         const cfg = config();
         if (!cfg) return null;
         return (
-            cfg.cells.find(
-                (c) =>
-                    x >= c.rect.x &&
-                    x <= c.rect.x + c.rect.width &&
-                    y >= c.rect.y &&
-                    y <= c.rect.y + c.rect.height,
-            )?.id ?? null
+            cfg.cells.find((c) => {
+                const r = effectiveCellRect(c);
+                return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
+            })?.id ?? null
         );
+    };
+
+    /** Resolve a free-icon drop position — nearest unoccupied slot when snapping. */
+    const resolveDropPos = (x: number, y: number, excludeIconId?: string): { x: number; y: number } => {
+        const cfg = config();
+        const px = Math.max(0, x);
+        const py = Math.max(0, y);
+        if (!cfg?.snap_to_grid) return { x: px, y: py };
+        const occupied = cfg.free_icons
+            .filter((i) => i.id !== excludeIconId && i.pos_x >= 0)
+            .map((i) => ({ x: i.pos_x, y: i.pos_y }));
+        return nearestFreeSlot(px, py, occupied, cfg.cells.map(effectiveCellRect), viewportSize());
     };
 
     // ── External file drops (from Explorer) ──────────────────────────────
     const addFreeIconAt = (filePath: string, x: number, y: number) => {
-        const icon: DIcon = {
-            id: crypto.randomUUID(),
-            name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? t('default.icon_name'),
-            path: filePath,
-            icon_path: null,
-            pos_x: x, pos_y: y,
-        };
-        setConfig((p) => p ? { ...p, free_icons: [...p.free_icons, icon] } : p);
+        setConfig((p) => {
+            if (!p) return p;
+            // The folder watcher may have reconciled it in already — dedupe by path
+            const low = filePath.toLowerCase();
+            if (p.free_icons.some((i) => i.path.toLowerCase() === low) ||
+                p.cells.some((c) => c.icons.some((i) => i.path.toLowerCase() === low))) {
+                return p;
+            }
+            const icon: DIcon = {
+                id: crypto.randomUUID(),
+                name: filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? t('default.icon_name'),
+                path: filePath,
+                icon_path: null,
+                pos_x: x, pos_y: y,
+            };
+            return { ...p, free_icons: [...p.free_icons, icon] };
+        });
+    };
+
+    /** Drop external file at (x, y): into a cell, or copy to desktop as free icon. */
+    const dropExternalFile = (filePath: string, x: number, y: number) => {
+        const targetCell = cellAtPoint(x, y);
+        if (targetCell) {
+            addIconToCell(targetCell, filePath);
+        } else {
+            invoke<string>('copy_to_desktop', { path: filePath }).then((newPath) => {
+                const pos = resolveDropPos(x - 38, y - 48);
+                addFreeIconAt(newPath, pos.x, pos.y);
+            }).catch(() => {});
+        }
     };
 
     const handleDomDrop = (e: DragEvent) => {
         e.preventDefault();
         const files = e.dataTransfer?.files;
         if (!files?.length) return;
-        const targetCell = cellAtPoint(e.clientX, e.clientY);
         for (let i = 0; i < files.length; i++) {
             const file = files[i] as File & { path?: string };
-            const filePath = file.path ?? file.name;
-            if (targetCell) {
-                addIconToCell(targetCell, filePath);
-            } else {
-                // Drop on desktop → copy to desktop folder, add as free icon at drop position
-                invoke<string>('copy_to_desktop', { path: filePath }).then((newPath) => {
-                    const snapHere = (x: number, y: number) => {
-                        const cfg = config();
-                        if (cfg?.snap_to_grid) {
-                            const cx = Math.round(x / 80) * 80;
-                            const cy = Math.round(y / 90) * 90;
-                            return { pos_x: Math.max(0, cx), pos_y: Math.max(0, cy) };
-                        }
-                        return { pos_x: x, pos_y: y };
-                    };
-                    const p = snapHere(e.clientX - 40, e.clientY - 40);
-                    addFreeIconAt(newPath, p.pos_x, p.pos_y);
-                }).catch(() => {});
-            }
+            dropExternalFile(file.path ?? file.name, e.clientX, e.clientY);
         }
     };
 
@@ -275,24 +319,8 @@ export default function Desktop() {
                 const dpr = window.devicePixelRatio || 1;
                 const cssX = (p.position?.x ?? 400) / dpr;
                 const cssY = (p.position?.y ?? 300) / dpr;
-
-                const targetCell = cellAtPoint(cssX, cssY);
                 for (const filePath of p.paths) {
-                    if (targetCell) {
-                        addIconToCell(targetCell, filePath);
-                    } else {
-                        // Tauri native drop on desktop → copy to desktop, add as free icon
-                        invoke<string>('copy_to_desktop', { path: filePath }).then((newPath) => {
-                            const posSnap = (x: number, y: number) => {
-                                const cfg = config();
-                                return cfg?.snap_to_grid
-                                    ? { pos_x: Math.max(0, Math.round(x / 80) * 80), pos_y: Math.max(0, Math.round(y / 90) * 90) }
-                                    : { pos_x: x, pos_y: y };
-                            };
-                            const p = posSnap(cssX - 40, cssY - 40);
-                            addFreeIconAt(newPath, p.pos_x, p.pos_y);
-                        }).catch(() => {});
-                    }
+                    dropExternalFile(filePath, cssX, cssY);
                 }
             });
         } catch {
@@ -314,9 +342,30 @@ export default function Desktop() {
             background_color: null,
             opacity: 0.85,
             layout: 'Grid',
+            collapsed: false,
             icons: [],
         };
         setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
+    };
+
+    /** One-click organize: needs the desktop scan to tell folders apart. */
+    const organizeDesktop = async () => {
+        try {
+            const scan = await invoke<DesktopScan>('scan_desktop');
+            const dirPaths = new Set(scan.entries.filter((e) => e.is_dir).map((e) => e.path.toLowerCase()));
+            const titles: Record<CategoryKey, string> = {
+                folders: t('organize.folders'),
+                apps: t('organize.apps'),
+                documents: t('organize.documents'),
+                images: t('organize.images'),
+                media: t('organize.media'),
+                archives: t('organize.archives'),
+                others: t('organize.others'),
+            };
+            setConfig((p) => (p ? organizeConfig(p, dirPaths, viewportSize(), titles) : p));
+        } catch {
+            toast.error(t('toast.organize_failed'));
+        }
     };
 
     const addIconsViaDialog = async (cellId: string) => {
@@ -330,6 +379,14 @@ export default function Desktop() {
             }
         } catch {
             // user cancelled or dialog error
+        }
+    };
+
+    const openIcon = async (ic: DIcon) => {
+        try {
+            await invoke('open_file', { path: ic.path });
+        } catch {
+            toast.error(t('toast.open_file_failed'));
         }
     };
 
@@ -361,12 +418,13 @@ export default function Desktop() {
             // 0.01 opacity prevents WebView2 from leaking drag to OS desktop.
             // 0.005 gets rounded to 0 by Chromium; 0.01 is the minimum safe value.
             style={{ "background-color": "rgba(255, 255, 255, 0.01)" }}
+            onClick={() => setSelectedId(null)}
             onContextMenu={(e) => {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY });
             }}
         >
-            {/* Cells �?<For> with key prevents destroying/recreating components on config change */}
+            {/* Cells — <For> with key prevents destroying/recreating components on config change */}
             <For each={config()?.cells ?? []}>
                 {(cell) => (
                     <CellBox
@@ -377,13 +435,7 @@ export default function Desktop() {
                         onResize={(id, w, h) =>
                             updateCell(id, (c) => ({ ...c, rect: { ...c.rect, width: w, height: h } }))
                         }
-                        onOpenIcon={async (ic) => {
-                            try {
-                                await invoke('open_file', { path: ic.path });
-                            } catch {
-                                toast.error(t('toast.open_file_failed'));
-                            }
-                        }}
+                        onOpenIcon={openIcon}
                         onRemoveIcon={(cid, iid) =>
                             updateCell(cid, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== iid) }))
                         }
@@ -400,61 +452,62 @@ export default function Desktop() {
                             setDragState({
                                 iconId, source: 'cell', cellId, icon,
                                 x: e.clientX, y: e.clientY,
+                                startX: e.clientX, startY: e.clientY,
                                 offsetX: e.clientX - rect.left,
                                 offsetY: e.clientY - rect.top,
+                                moved: false,
                             });
                             invoke('set_dragging', { dragging: true }).catch(() => {});
                         }}
+                        onToggleCollapse={(id) =>
+                            updateCell(id, (c) => ({ ...c, collapsed: !c.collapsed }))
+                        }
                         onNewCell={createNewCell}
                         onExit={() => invoke('quit_app').catch(() => {})}
                     />
                 )}
             </For>
 
-            {/* Free-floating icons — auto-grid or free absolute positions */}
-            {!config()?.auto_arrange ? (
-                <For each={config()?.free_icons ?? []}>
-                    {(icon) => (
-                        <div data-icon class="absolute" style={{
+            {/* Free icons — Windows-like fixed grid slots, absolute positions.
+                No remove button: like the native desktop, a free icon exists
+                exactly as long as its file does (the watcher enforces this). */}
+            <For each={config()?.free_icons ?? []}>
+                {(icon) => (
+                    <div
+                        data-icon
+                        class="absolute"
+                        style={{
                             left: `${icon.pos_x}px`,
                             top: `${icon.pos_y}px`,
-                        }}>
-                            <DesktopIconComponent
-                                icon={icon}
-                                onOpen={async (ic) => { try { await invoke('open_file', { path: ic.path }); } catch { toast.error(t('toast.open_file_failed')); } }}
-                                onRemove={(ic) => setConfig((p) => p ? { ...p, free_icons: p.free_icons.filter((i) => i.id !== ic.id) } : p)}
-                                onDragStart={(iconId, e) => {
-                                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                    setDragState({ iconId, source: 'free', cellId: '', icon, x: e.clientX, y: e.clientY, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
-                                    invoke('set_dragging', { dragging: true }).catch(() => {});
-                                }}
-                            />
-                        </div>
-                    )}
-                </For>
-            ) : (
-                <div class="absolute top-2 left-2 flex flex-col flex-wrap content-start gap-1" style="max-height: calc(100vh - 20px); max-width: calc(100vw - 20px);">
-                    <For each={config()?.free_icons ?? []}>
-                        {(icon) => (
-                            <div data-icon>
-                                <DesktopIconComponent
-                                    icon={icon}
-                                    onOpen={async (ic) => { try { await invoke('open_file', { path: ic.path }); } catch { toast.error(t('toast.open_file_failed')); } }}
-                                    onRemove={(ic) => setConfig((p) => p ? { ...p, free_icons: p.free_icons.filter((i) => i.id !== ic.id) } : p)}
-                                    onDragStart={(iconId, e) => {
-                                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                        setDragState({ iconId, source: 'free', cellId: '', icon, x: e.clientX, y: e.clientY, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
-                                        invoke('set_dragging', { dragging: true }).catch(() => {});
-                                    }}
-                                />
-                            </div>
-                        )}
-                    </For>
-                </div>
-            )}
+                            // Sentinel (-1) icons are placed by the next reconcile
+                            ...(icon.pos_x < 0 || icon.pos_y < 0 ? { display: 'none' } : {}),
+                        }}
+                    >
+                        <DesktopIconComponent
+                            icon={icon}
+                            selected={selectedId() === icon.id}
+                            onSelect={(ic) => setSelectedId(ic.id)}
+                            onOpen={openIcon}
+                            labelClass="desktop-icon-label"
+                            onDragStart={(iconId, e) => {
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setDragState({
+                                    iconId, source: 'free', cellId: '', icon,
+                                    x: e.clientX, y: e.clientY,
+                                    startX: e.clientX, startY: e.clientY,
+                                    offsetX: e.clientX - rect.left,
+                                    offsetY: e.clientY - rect.top,
+                                    moved: false,
+                                });
+                                invoke('set_dragging', { dragging: true }).catch(() => {});
+                            }}
+                        />
+                    </div>
+                )}
+            </For>
 
             {/* Empty state */}
-            {config() && config()!.cells.length === 0 && (
+            {config() && config()!.cells.length === 0 && config()!.free_icons.length === 0 && (
                 <div class="flex items-center justify-center h-full">
                     <p class="text-gray-400 dark:text-gray-500 text-sm italic">
                         {t('desktop.empty')}
@@ -474,34 +527,7 @@ export default function Desktop() {
                         {
                             label: t('desktop.context.refresh'),
                             icon: <FiRefreshCw />,
-                            onClick: async () => {
-                                try {
-                                    const desktopPaths = await invoke<string[]>('scan_desktop_files');
-                                    // Collect paths from both free_icons AND cells to avoid re-adding
-                                    // icons already organized into cells.
-                                    const cfg = config();
-                                    const existingPaths = new Set([
-                                        ...(cfg?.free_icons.map((i) => i.path.toLowerCase()) ?? []),
-                                        ...(cfg?.cells.flatMap((c) => c.icons.map((i) => i.path.toLowerCase())) ?? []),
-                                    ]);
-                                    const newIcons: DIcon[] = [];
-                                    for (const p of desktopPaths) {
-                                        if (existingPaths.has(p.toLowerCase())) continue;
-                                        const filename = p.split(/[\\/]/).pop() ?? '';
-                                        if (filename.startsWith('.') || filename.toLowerCase() === 'desktop.ini') continue;
-                                        newIcons.push({
-                                            id: crypto.randomUUID(),
-                                            name: filename.replace(/\.[^.]+$/, ''),
-                                            path: p,
-                                            icon_path: null,
-                                            pos_x: 0, pos_y: 0,
-                                        });
-                                    }
-                                    if (newIcons.length > 0) {
-                                        setConfig((p) => p ? { ...p, free_icons: [...p.free_icons, ...newIcons] } : p);
-                                    }
-                                } catch { /* ignore */ }
-                            },
+                            onClick: () => { void reconcileDesktop(); },
                         },
                         {
                             label: t('desktop.context.arrangement'),
@@ -510,13 +536,31 @@ export default function Desktop() {
                                 {
                                     label: `${config()?.auto_arrange ? '☑ ' : '☐ '}${t('desktop.context.arrange_auto')}`,
                                     onClick: () => {
-                                        setConfig((p) => p ? { ...p, auto_arrange: !p.auto_arrange } : p);
+                                        setConfig((p) => {
+                                            if (!p) return p;
+                                            const next = { ...p, auto_arrange: !p.auto_arrange };
+                                            // Turning auto-arrange on compacts immediately
+                                            return next.auto_arrange ? arrangeFreeIcons(next, viewportSize()) : next;
+                                        });
                                     },
                                 },
                                 {
                                     label: `${config()?.snap_to_grid ? '☑ ' : '☐ '}${t('desktop.context.arrange_snap')}`,
                                     onClick: () => {
-                                        setConfig((p) => p ? { ...p, snap_to_grid: !p.snap_to_grid } : p);
+                                        setConfig((p) => {
+                                            if (!p) return p;
+                                            const next = { ...p, snap_to_grid: !p.snap_to_grid };
+                                            // Turning snapping on aligns everything at once (native behavior)
+                                            return next.snap_to_grid
+                                                ? {
+                                                      ...next,
+                                                      free_icons: next.free_icons.map((i) => i.pos_x < 0 ? i : { ...i, ...(() => {
+                                                          const s = snapToGrid(i.pos_x, i.pos_y);
+                                                          return { pos_x: s.x, pos_y: s.y };
+                                                      })() }),
+                                                  }
+                                                : next;
+                                        });
                                     },
                                 },
                             ],
@@ -529,20 +573,22 @@ export default function Desktop() {
                         {
                             label: t('desktop.context.organize'),
                             icon: <FiGrid />,
-                            onClick: async () => {
-                                try {
-                                    setConfig(await invoke<DeskConfig>('organize_icons'));
-                                } catch {
-                                    toast.error(t('toast.organize_failed'));
-                                }
-                            },
+                            onClick: () => { void organizeDesktop(); },
                         },
                         {
                             label: t('desktop.context.reset'),
                             icon: <FiTrash2 />,
                             destructive: true,
-                            onClick: () => {
-                                invoke('reset_config').catch(() => {});
+                            onClick: async () => {
+                                try {
+                                    // Bug fix: the returned config was ignored before, so
+                                    // reset never updated the UI. Apply it, then reconcile
+                                    // to assign grid slots to the fresh (sentinel) icons.
+                                    setConfig(await invoke<DeskConfig>('reset_config'));
+                                    await reconcileDesktop();
+                                } catch {
+                                    toast.error(t('toast.load_config_failed'));
+                                }
                             },
                         },
                         {
@@ -569,26 +615,31 @@ export default function Desktop() {
                 }
             />
 
-            {/* Drag ghost — follows cursor during simulated drag */}
+            {/* Drag ghost — follows cursor once the drag threshold is passed */}
             <Show when={dragState()}>
                 {(ds) => (
-                    <div
-                        class="fixed z-[10000] pointer-events-none flex flex-col items-center gap-0.5 p-1.5 rounded-lg bg-white/80 dark:bg-gray-800/80 shadow-lg"
-                        style={{
-                            left: `${ds().x - ds().offsetX}px`,
-                            top: `${ds().y - ds().offsetY}px`,
-                            width: '72px',
-                        }}
-                    >
-                        <div class="w-8 h-8 flex items-center justify-center">
-                            <FiFile class="text-lg text-gray-400 dark:text-gray-500" />
+                    <Show when={ds().moved}>
+                        <div
+                            class="fixed z-[10000] pointer-events-none flex flex-col items-center gap-0.5 p-1 rounded opacity-80"
+                            style={{
+                                left: `${ds().x - ds().offsetX}px`,
+                                top: `${ds().y - ds().offsetY}px`,
+                                width: '72px',
+                            }}
+                        >
+                            <div class="w-12 h-12 flex items-center justify-center">
+                                <Show
+                                    when={getCachedIcon(ds().icon.path)}
+                                    fallback={<FiFile class="text-3xl text-gray-400 dark:text-gray-500" />}
+                                >
+                                    {(url) => <img src={url()} alt="" class="w-full h-full object-contain" draggable="false" />}
+                                </Show>
+                            </div>
+                            <span class="text-xs text-center leading-tight line-clamp-2 max-w-full desktop-icon-label">
+                                {ds().icon.name}
+                            </span>
                         </div>
-                        <span class="text-xs text-gray-700 dark:text-gray-200 truncate max-w-full">
-                            {ds().icon.name.length > 10
-                                ? ds().icon.name.slice(0, 9) + '\u2026'
-                                : ds().icon.name}
-                        </span>
-                    </div>
+                    </Show>
                 )}
             </Show>
         </div>

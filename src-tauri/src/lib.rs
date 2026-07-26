@@ -5,49 +5,8 @@ use tauri::Manager;
 
 mod bindings;
 mod config;
+mod desktop;
 mod window_manager;
-
-fn desktop_dir() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(profile) = std::env::var("USERPROFILE") {
-            return std::path::PathBuf::from(profile).join("Desktop");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return std::path::PathBuf::from(home).join("Desktop");
-    }
-    std::path::PathBuf::from(".")
-}
-
-/// Scan the desktop folder for files/folders, categorized by type.
-/// Returns (folders, apps, files) vectors.
-fn scan_desktop_categorized() -> (Vec<config::DesktopIcon>, Vec<config::DesktopIcon>, Vec<config::DesktopIcon>) {
-    let mut folders = Vec::new();
-    let mut apps = Vec::new();
-    let mut files = Vec::new();
-
-    let Ok(entries) = std::fs::read_dir(desktop_dir()) else { return (folders, apps, files) };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
-        if name.starts_with('.') || name.eq_ignore_ascii_case("desktop.ini") { continue }
-        let display = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_string();
-        let icon = config::DesktopIcon {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: display,
-            path: path.to_string_lossy().to_string(),
-            icon_path: None,            pos_x: 0.0, pos_y: 0.0,        };
-        if path.is_dir() {
-            folders.push(icon);
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if config::is_app_extension(ext) { apps.push(icon); } else { files.push(icon); }
-        } else {
-            files.push(icon); // no extension → general file
-        }
-    }
-    (folders, apps, files)
-}
 
 pub fn run() {
     tauri::Builder::default()
@@ -61,13 +20,13 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir).ok();
 
             // Create default config — all desktop files as free-floating icons
+            // (positions use the -1 sentinel; the frontend assigns grid slots)
             let config_path = data_dir.join("deskchan.toml");
             if !config_path.exists() {
-                let (folders, apps, files) = scan_desktop_categorized();
-                let mut free_icons = Vec::new();
-                free_icons.extend(folders);
-                free_icons.extend(apps);
-                free_icons.extend(files);
+                let free_icons = desktop::list_entries()
+                    .into_iter()
+                    .map(|(path, is_dir)| desktop::make_icon(&path, is_dir))
+                    .collect();
                 let cfg = config::DeskConfig {
                     free_icons,
                     ..config::DeskConfig::default()
@@ -103,6 +62,9 @@ pub fn run() {
             app.manage(state.clone());
             window_manager::start_background_threads(app.handle().clone(), state);
 
+            // Watch the desktop folders → emit `desktop-changed` for JS reconcile
+            desktop::start_watcher(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -113,9 +75,7 @@ pub fn run() {
             bindings::get_file_icon,
             bindings::quit_app,
             bindings::reset_config,
-            bindings::organize_icons,
-            bindings::scan_desktop_files,
-            bindings::set_arrangement,
+            bindings::scan_desktop,
             bindings::copy_to_desktop,
         ])
         .run(tauri::generate_context!())

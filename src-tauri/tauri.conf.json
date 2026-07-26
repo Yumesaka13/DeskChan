@@ -16,7 +16,7 @@
         "title": "DeskChan",
         "width": 1920,
         "height": 1080,
-        "resizable": true,
+        "resizable": false,
         "decorations": false,
         "transparent": true,
         "skipTaskbar": true,
