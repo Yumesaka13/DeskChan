@@ -17,7 +17,7 @@ import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import { FiPlus, FiTrash2, FiSettings, FiPower, FiChevronUp } from 'solid-icons/fi';
-import { BsChevronDown, BsChevronExpand } from 'solid-icons/bs';
+import { BsCaretDownFill, BsCaretUpFill, BsChevronExpand } from 'solid-icons/bs';
 
 export interface CellBoxProps {
     /** The cell data */
@@ -28,8 +28,6 @@ export interface CellBoxProps {
     onResize?: (id: string, w: number, h: number) => void;
     /** Called when an icon is clicked (should open file) */
     onOpenIcon: (icon: DesktopIconData) => void;
-    /** Called to remove an icon from the cell */
-    onRemoveIcon: (cellId: string, iconId: string) => void;
     /** Called when icons are dropped onto the cell */
     onDropIcons: (cellId: string, iconPaths: string[]) => void;
     /** Called when an existing icon is dragged from another cell into this one */
@@ -299,22 +297,28 @@ export default function CellBox(props: CellBoxProps) {
                         {/* Mode switch (Coodesker style): CLICK TOGGLES THE
                             COLLAPSE MODE, and the icon shows the current one —
                             auto (roll up on leave / expand on hover) is the
-                            up+down chevron, manual (pinned) a single chevron.
-                            Collapse itself is a title-bar double-click. */}
+                            up+down caret pair, manual (pinned) a single caret.
+                            Collapse itself is a title-bar double-click.
+                            Flat design: solid glyphs, opacity-only states —
+                            no pill background, no border, no shadow. */}
                         <button
                             onClick={(e) => { e.stopPropagation(); props.onToggleHoverExpand(props.cell.id); }}
                             onDblClick={(e) => e.stopPropagation()}
                             class={cn(
-                                'p-1 rounded-md transition-colors duration-150',
-                                'text-gray-400 dark:text-gray-500',
-                                'hover:text-gray-700 dark:hover:text-gray-200',
-                                'hover:bg-gray-200/50 dark:hover:bg-gray-600/40',
+                                'p-1 transition-opacity duration-150',
+                                'text-gray-500 dark:text-gray-300',
+                                'opacity-40 hover:opacity-100',
                             )}
                             title={t('cell.hover_expand')}
                         >
-                            {props.cell.hover_expand
-                                ? <BsChevronExpand class="w-3 h-3" />
-                                : <BsChevronDown class="w-3 h-3" />}
+                            {props.cell.hover_expand ? (
+                                <span class="flex flex-col -space-y-0.5">
+                                    <BsCaretUpFill class="w-2.5 h-2.5" />
+                                    <BsCaretDownFill class="w-2.5 h-2.5" />
+                                </span>
+                            ) : (
+                                <BsCaretDownFill class="w-3 h-3" />
+                            )}
                         </button>
                     </div>
                 </Show>
@@ -341,7 +345,6 @@ export default function CellBox(props: CellBoxProps) {
                                     <DesktopIconComponent
                                         icon={icon}
                                         onOpen={props.onOpenIcon}
-                                        onRemove={(ic) => props.onRemoveIcon(props.cell.id, ic.id)}
                                         onDragStart={props.onDragStart
                                             ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
                                             : undefined}

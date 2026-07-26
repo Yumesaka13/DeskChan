@@ -9,10 +9,9 @@
  */
 import { createResource, Show } from 'solid-js';
 import { cn } from '~/lib/utils';
-import { useI18n } from '~/i18n';
 import { fetchIcon } from '~/lib/icon-cache';
 import type { DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
-import { FiFile, FiX } from 'solid-icons/fi';
+import { FiFile } from 'solid-icons/fi';
 
 export interface DesktopIconProps {
     icon: DesktopIconData;
@@ -21,7 +20,6 @@ export interface DesktopIconProps {
     /** Single click — select (event exposes ctrl/meta for multi-select) */
     onSelect?: (icon: DesktopIconData, e: MouseEvent) => void;
     selected?: boolean;
-    onRemove?: (icon: DesktopIconData) => void;
     onDragStart?: (iconId: string, e: PointerEvent) => void;
     /** Right-click — shows the native Windows shell menu for the file */
     onNativeMenu?: (icon: DesktopIconData) => void;
@@ -31,7 +29,6 @@ export interface DesktopIconProps {
 }
 
 export default function DesktopIcon(props: DesktopIconProps) {
-    const { t } = useI18n();
     const [iconUrl] = createResource(() => props.icon.path, fetchIcon);
 
     return (
@@ -81,15 +78,6 @@ export default function DesktopIcon(props: DesktopIconProps) {
             >
                 {props.icon.name}
             </span>
-            {props.onRemove && (
-                <button
-                    onClick={(e) => { e.stopPropagation(); props.onRemove?.(props.icon); }}
-                    class="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600"
-                    title={t('icon.remove')}
-                >
-                    <FiX class="w-3 h-3" />
-                </button>
-            )}
         </div>
     );
 }
