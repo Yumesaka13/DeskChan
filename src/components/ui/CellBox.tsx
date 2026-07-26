@@ -168,12 +168,14 @@ export default function CellBox(props: CellBoxProps) {
             let { x, y, width, height } = r0;
             if (dir.e) width = Math.max(MIN_W, r0.width + dx);
             if (dir.s) height = Math.max(MIN_H, r0.height + dy);
+            // n/w growth is capped at the screen origin so the title bar can
+            // never be dragged (and persisted) off-screen
             if (dir.w) {
-                width = Math.max(MIN_W, r0.width - dx);
+                width = Math.max(MIN_W, Math.min(r0.width - dx, r0.x + r0.width));
                 x = r0.x + (r0.width - width);
             }
             if (dir.n) {
-                height = Math.max(MIN_H, r0.height - dy);
+                height = Math.max(MIN_H, Math.min(r0.height - dy, r0.y + r0.height));
                 y = r0.y + (r0.height - height);
             }
             last = { x, y, width, height };
@@ -217,6 +219,7 @@ export default function CellBox(props: CellBoxProps) {
             icon: <FiPlus />,
             onClick: () => props.onAddIcons(props.cell.id),
         },
+        { separator: true },
         // Keep bar-only actions reachable when titles are hidden
         {
             label: collapsed() ? t('cell.expand') : t('cell.collapse'),
@@ -235,6 +238,7 @@ export default function CellBox(props: CellBoxProps) {
                 /* TODO: open cell settings */
             },
         },
+        { separator: true },
         {
             label: t('cell.context.delete_cell'),
             icon: <FiTrash2 />,

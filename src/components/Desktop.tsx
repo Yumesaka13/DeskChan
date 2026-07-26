@@ -801,15 +801,17 @@ export default function Desktop() {
                             ],
                         },
                         {
-                            label: t('desktop.context.settings'),
-                            icon: <FiSettings />,
-                            onClick: () => setSettingsOpen(true),
-                        },
-                        {
                             label: t('desktop.context.organize'),
                             icon: <FiGrid />,
                             onClick: () => { void organizeDesktop(); },
                         },
+                        { separator: true },
+                        {
+                            label: t('desktop.context.settings'),
+                            icon: <FiSettings />,
+                            onClick: () => setSettingsOpen(true),
+                        },
+                        { separator: true },
                         {
                             label: t('desktop.context.exit'),
                             icon: <FiPower />,
