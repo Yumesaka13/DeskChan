@@ -14,6 +14,7 @@ import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import { arrangeFreeIcons, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid } from '~/lib/grid';
+import { deleteSubCell, removeIcon, withActiveIcons } from '~/lib/cell';
 import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
 import { getCachedIcon } from '~/lib/icon-cache';
@@ -234,7 +235,7 @@ export default function Desktop() {
             );
 
             if (targetCell && targetCell !== ds.cellId) {
-                // The whole selection drops into the cell together
+                // The whole selection drops into the target's active tab
                 setConfig((p) => {
                     if (!p) return p;
                     const live = ds.source === 'free'
@@ -244,8 +245,8 @@ export default function Desktop() {
                         ...p,
                         free_icons: ds.source === 'free' ? p.free_icons.filter((i) => !groupIds.has(i.id)) : p.free_icons,
                         cells: p.cells.map((c) => {
-                            if (c.id === ds.cellId && ds.source === 'cell') return { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) };
-                            if (c.id === targetCell) return { ...c, icons: [...c.icons, ...live] };
+                            if (c.id === ds.cellId && ds.source === 'cell') return removeIcon(c, ds.iconId);
+                            if (c.id === targetCell) return withActiveIcons(c, (icons) => [...icons, ...live]);
                             return c;
                         }),
                     };
@@ -255,7 +256,7 @@ export default function Desktop() {
                     const pos = resolveDropPos(ds.x - ds.offsetX, ds.y - ds.offsetY, ds.iconId);
                     setConfig((p) => p ? {
                         ...p,
-                        cells: p.cells.map((c) => c.id === ds.cellId ? { ...c, icons: c.icons.filter((i) => i.id !== ds.iconId) } : c),
+                        cells: p.cells.map((c) => c.id === ds.cellId ? removeIcon(c, ds.iconId) : c),
                         free_icons: [...p.free_icons, { ...ds.icon, pos_x: pos.x, pos_y: pos.y }],
                     } : p);
                 } else {
@@ -327,7 +328,8 @@ export default function Desktop() {
             p ? { ...p, cells: p.cells.map((c) => (c.id === id ? fn(c) : c)) } : p,
         );
 
-    /** Create an icon entry and add it to a cell (no file movement — just config). */
+    /** Create an icon entry and add it to a cell's active tab
+     *  (no file movement — just config). */
     const addIconToCell = (cellId: string, filePath: string) => {
         const icon: DIcon = {
             id: crypto.randomUUID(),
@@ -336,36 +338,7 @@ export default function Desktop() {
             icon_path: null,
             pos_x: 0, pos_y: 0,
         };
-        updateCell(cellId, (c) => ({ ...c, icons: [...c.icons, icon] }));
-    };
-    /** Move an existing icon from its current cell to a target cell. */
-    const moveIconToCell = (iconId: string, targetCellId: string) => {
-        const cfg = config();
-        if (!cfg) return;
-        // Find the icon in its current cell
-        for (const cell of cfg.cells) {
-            const icon = cell.icons.find((i) => i.id === iconId);
-            if (icon && cell.id !== targetCellId) {
-                // Remove from source cell, add to target cell
-                setConfig((p) =>
-                    p
-                        ? {
-                              ...p,
-                              cells: p.cells.map((c) => {
-                                  if (c.id === cell.id) {
-                                      return { ...c, icons: c.icons.filter((i) => i.id !== iconId) };
-                                  }
-                                  if (c.id === targetCellId) {
-                                      return { ...c, icons: [...c.icons, icon] };
-                                  }
-                                  return c;
-                              }),
-                          }
-                        : p,
-                );
-                return;
-            }
-        }
+        updateCell(cellId, (c) => withActiveIcons(c, (icons) => [...icons, icon]));
     };
 
     /** Find which cell (if any) is at the given coordinates. DOM hit-testing
@@ -453,7 +426,7 @@ export default function Desktop() {
         }
     });
 
-    // ── Create new cell / add icons via dialog ───────────────────────────
+    // ── Create new cell / sub-box ────────────────────────────────────────
     const createNewCell = () => {
         const newCell: Cell = {
             id: crypto.randomUUID(),
@@ -470,8 +443,21 @@ export default function Desktop() {
             collapsed: false,
             hover_expand: true,
             icons: [],
+            sub_cells: [],
+            active_sub: null,
+            sub_style: 'Compact',
         };
         setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
+    };
+
+    /** Append a new empty sub-box tab and make it the active one. */
+    const createSubCell = (cellId: string) => {
+        const sub = { id: crypto.randomUUID(), title: t('default.sub_title'), icons: [] };
+        updateCell(cellId, (c) => ({
+            ...c,
+            sub_cells: [...c.sub_cells, sub],
+            active_sub: sub.id,
+        }));
     };
 
     /** One-click organize: needs the desktop scan to tell folders apart. */
@@ -491,20 +477,6 @@ export default function Desktop() {
             setConfig((p) => (p ? organizeConfig(p, dirPaths, viewportSize(), titles) : p));
         } catch {
             toast.error(t('toast.organize_failed'));
-        }
-    };
-
-    const addIconsViaDialog = async (cellId: string) => {
-        try {
-            const selected = await open({ multiple: true, title: t('default.add_files_title') });
-            if (!selected) return;
-            const arr = Array.isArray(selected) ? selected : [selected];
-            const paths = arr.map((p) => (typeof p === 'string' ? p : (p as { path: string }).path));
-            for (const p of paths) {
-                addIconToCell(cellId, p);
-            }
-        } catch {
-            // user cancelled or dialog error
         }
     };
 
@@ -594,7 +566,7 @@ export default function Desktop() {
                 extraItems,
             });
             if (picked === 0 && cellId) {
-                updateCell(cellId, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== icon.id) }));
+                updateCell(cellId, (c) => removeIcon(c, icon.id));
             }
         } catch {
             /* best-effort; double-click open still works */
@@ -646,13 +618,11 @@ export default function Desktop() {
                         onResize={(id, rect) => updateCell(id, (c) => ({ ...c, rect }))}
                         onOpenIcon={openIcon}
                         onDropIcons={(cid, paths) => paths.forEach(p => addIconToCell(cid, p))}
-                        onMoveIcon={moveIconToCell}
                         onDelete={(id) =>
                             setConfig((p) =>
                                 p ? { ...p, cells: p.cells.filter((c) => c.id !== id) } : p,
                             )
                         }
-                        onAddIcons={addIconsViaDialog}
                         onDragStart={(iconId, cellId, icon, e) => {
                             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                             setDragState({
@@ -666,13 +636,6 @@ export default function Desktop() {
                             });
                             invoke('set_dragging', { dragging: true }).catch(() => {});
                         }}
-                        onToggleCollapse={(id) => {
-                            // Explicit collapse must roll up immediately even
-                            // with the pointer still inside (mouseenter only
-                            // re-fires after leaving and re-entering)
-                            setHoverCellId(null);
-                            updateCell(id, (c) => ({ ...c, collapsed: !c.collapsed }));
-                        }}
                         onToggleHoverExpand={(id) =>
                             // Coodesker semantics: entering auto mode arms the
                             // roll-up (cell stays open under the hovering
@@ -683,11 +646,24 @@ export default function Desktop() {
                                 : { ...c, hover_expand: true, collapsed: true })
                         }
                         onIconMenu={(cellId, icon) => { void showIconMenu(icon, cellId); }}
+                        onRename={(id, title) => updateCell(id, (c) => ({ ...c, title }))}
+                        onCreateSub={createSubCell}
+                        onSelectSub={(id, subId) =>
+                            updateCell(id, (c) => ({ ...c, active_sub: subId }))
+                        }
+                        onRenameSub={(id, subId, title) =>
+                            updateCell(id, (c) => ({
+                                ...c,
+                                sub_cells: c.sub_cells.map((s) => (s.id === subId ? { ...s, title } : s)),
+                            }))
+                        }
+                        onDeleteSub={(id, subId) => updateCell(id, (c) => deleteSubCell(c, subId))}
+                        onSetSubStyle={(id, style) =>
+                            updateCell(id, (c) => ({ ...c, sub_style: style }))
+                        }
                         showTitles={config()?.show_titles ?? true}
                         hovered={hoverCellId() === cell.id}
                         onHover={cellHover}
-                        onNewCell={createNewCell}
-                        onExit={() => invoke('quit_app').catch(() => {})}
                     />
                 )}
             </For>
