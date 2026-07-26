@@ -36,7 +36,9 @@ export default function DesktopIcon(props: DesktopIconProps) {
             class={cn(
                 'flex flex-col items-center gap-0.5 p-1 rounded',
                 'cursor-default select-none',
-                'border border-transparent',
+                // border-solid: no CSS reset in this app, the UA default
+                // border-style:none would swallow the selection outline
+                'border border-solid border-transparent',
                 'hover:bg-blue-400/15 hover:border-blue-300/20',
                 props.selected && 'bg-blue-400/30 border-blue-300/40',
                 'w-18 group relative',
