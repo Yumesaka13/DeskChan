@@ -349,6 +349,12 @@ unsafe extern "system" fn wndproc(
 ) -> isize {
     use constants::*;
 
+    // While a native shell context menu is open, hand its messages to
+    // IContextMenu2/3 so dynamic submenus ("Send To", "Open With") populate.
+    if let Some(result) = crate::shell_menu::forward_menu_msg(msg, wparam, lparam) {
+        return result;
+    }
+
     match msg {
         // Block hide
         WM_SHOWWINDOW if wparam == 0 => return 0,

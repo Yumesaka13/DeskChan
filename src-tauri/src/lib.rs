@@ -6,6 +6,7 @@ use tauri::Manager;
 mod bindings;
 mod config;
 mod desktop;
+mod shell_menu;
 mod window_manager;
 
 pub fn run() {
@@ -77,6 +78,7 @@ pub fn run() {
             bindings::reset_config,
             bindings::scan_desktop,
             bindings::copy_to_desktop,
+            bindings::show_icon_menu,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

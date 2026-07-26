@@ -23,6 +23,8 @@ export interface DesktopIconProps {
     selected?: boolean;
     onRemove?: (icon: DesktopIconData) => void;
     onDragStart?: (iconId: string, e: PointerEvent) => void;
+    /** Right-click — shows the native Windows shell menu for the file */
+    onNativeMenu?: (icon: DesktopIconData) => void;
     class?: string;
     iconClass?: string;
     labelClass?: string;
@@ -45,6 +47,14 @@ export default function DesktopIcon(props: DesktopIconProps) {
             )}
             onClick={(e) => { e.stopPropagation(); props.onSelect?.(props.icon); }}
             onDblClick={(e) => { e.stopPropagation(); props.onOpen(props.icon); }}
+            onContextMenu={(e) => {
+                if (props.onNativeMenu) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    props.onSelect?.(props.icon);
+                    props.onNativeMenu(props.icon);
+                }
+            }}
             onPointerDown={(e) => {
                 if (props.onDragStart && e.button === 0) {
                     e.preventDefault();

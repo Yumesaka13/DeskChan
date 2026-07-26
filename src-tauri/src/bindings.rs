@@ -88,5 +88,18 @@ pub fn copy_to_desktop(path: String) -> Result<String, String> {
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Show the native Windows shell context menu for a file at the cursor.
+/// `extra_items` are appended after a separator; returns the index of the
+/// picked extra item, or None when a native verb ran / menu was dismissed.
+/// Async so the blocking menu loop never runs on a Tauri core thread.
+#[tauri::command]
+pub async fn show_icon_menu(
+    window: tauri::WebviewWindow,
+    path: String,
+    extra_items: Vec<String>,
+) -> Result<Option<u32>, String> {
+    crate::shell_menu::show(window, path, extra_items)
+}
+
 // Note: one-click organize lives in TS (src/lib/organize.ts) — it needs
 // i18n cell titles and viewport-aware layout, which only the frontend has.

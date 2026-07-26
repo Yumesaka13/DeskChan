@@ -36,6 +36,8 @@ export interface CellBoxProps {
     onToggleCollapse: (id: string) => void;
     /** Called to toggle hover-expand mode (auto-unroll while hovered) */
     onToggleHoverExpand: (id: string) => void;
+    /** Called on icon right-click — shows the native shell menu */
+    onIconMenu?: (cellId: string, icon: DesktopIconData) => void;
     /** Whether cell title bars are shown (collapsed cells always keep theirs) */
     showTitles?: boolean;
     /** Live hover state — owned by Desktop so it survives cell re-creation */
@@ -344,6 +346,9 @@ export default function CellBox(props: CellBoxProps) {
                                         onRemove={(ic) => props.onRemoveIcon(props.cell.id, ic.id)}
                                         onDragStart={props.onDragStart
                                             ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
+                                            : undefined}
+                                        onNativeMenu={props.onIconMenu
+                                            ? (ic) => props.onIconMenu!(props.cell.id, ic)
                                             : undefined}
                                     />
                                 </div>

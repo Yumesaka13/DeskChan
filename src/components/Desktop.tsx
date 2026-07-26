@@ -403,6 +403,24 @@ export default function Desktop() {
         }
     };
 
+    /** Native Windows shell context menu for an icon. For cell icons a
+     *  "remove" entry is appended; free icons mirror real desktop files, so
+     *  the native verbs (delete, rename, …) plus the watcher cover them. */
+    const showIconMenu = async (icon: DIcon, cellId?: string) => {
+        try {
+            const extraItems = cellId ? [t('icon.remove')] : [];
+            const picked = await invoke<number | null>('show_icon_menu', {
+                path: icon.path,
+                extraItems,
+            });
+            if (picked === 0 && cellId) {
+                updateCell(cellId, (c) => ({ ...c, icons: c.icons.filter((i) => i.id !== icon.id) }));
+            }
+        } catch {
+            /* best-effort; double-click open still works */
+        }
+    };
+
     // ── Render ───────────────────────────────────────────────────────────
     let desktopRef!: HTMLDivElement;
 
@@ -482,6 +500,7 @@ export default function Desktop() {
                         onToggleHoverExpand={(id) =>
                             updateCell(id, (c) => ({ ...c, hover_expand: !c.hover_expand }))
                         }
+                        onIconMenu={(cellId, icon) => { void showIconMenu(icon, cellId); }}
                         showTitles={config()?.show_titles ?? true}
                         hovered={hoverCellId() === cell.id}
                         onHover={cellHover}
@@ -511,6 +530,7 @@ export default function Desktop() {
                             selected={selectedId() === icon.id}
                             onSelect={(ic) => setSelectedId(ic.id)}
                             onOpen={openIcon}
+                            onNativeMenu={(ic) => { void showIconMenu(ic); }}
                             labelClass="desktop-icon-label"
                             onDragStart={(iconId, e) => {
                                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
