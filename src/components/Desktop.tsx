@@ -643,9 +643,7 @@ export default function Desktop() {
                         onMove={(id, x, y) =>
                             updateCell(id, (c) => ({ ...c, rect: { ...c.rect, x, y } }))
                         }
-                        onResize={(id, w, h) =>
-                            updateCell(id, (c) => ({ ...c, rect: { ...c.rect, width: w, height: h } }))
-                        }
+                        onResize={(id, rect) => updateCell(id, (c) => ({ ...c, rect }))}
                         onOpenIcon={openIcon}
                         onDropIcons={(cid, paths) => paths.forEach(p => addIconToCell(cid, p))}
                         onMoveIcon={moveIconToCell}
