@@ -41,10 +41,10 @@ function OptionButton(props: {
         <button
             onClick={() => props.onClick()}
             class={cn(
-                'flex-1 px-3 py-1.5 rounded-lg text-sm',
-                'border border-gray-300 dark:border-gray-600',
-                'hover:bg-gray-100 dark:hover:bg-gray-700',
-                props.active && 'bg-brand-primary text-white border-brand-primary',
+                'flex-1',
+                props.active
+                    ? 'fluent-btn-accent'
+                    : 'fluent-btn',
             )}
         >
             {props.label}
@@ -74,18 +74,23 @@ export default function SettingsDialog(props: SettingsDialogProps) {
         props.onClose();
     };
 
+    // WinUI-style tab: quiet text with a rounded hover fill and an accent
+    // underline pill marking the selected item
     const tabTrigger = (value: string, label: string) => (
         <Tabs.Trigger
             value={value}
             class={cn(
-                'px-3 py-1.5 rounded-md text-sm transition-colors',
-                'hover:bg-gray-100 dark:hover:bg-gray-700/60',
+                'relative px-3 py-1.5 rounded text-sm transition-colors',
+                'hover:bg-black/5 dark:hover:bg-white/8',
                 tab() === value
-                    ? 'bg-gray-100 dark:bg-gray-700/80 text-gray-900 dark:text-gray-50 font-medium'
+                    ? 'text-gray-900 dark:text-gray-50 font-semibold'
                     : 'text-gray-500 dark:text-gray-400',
             )}
         >
             {label}
+            <Show when={tab() === value}>
+                <span class="absolute -bottom-px left-1/2 -translate-x-1/2 w-4 h-[3px] rounded-full bg-brand-primary dark:bg-brand-secondary" />
+            </Show>
         </Tabs.Trigger>
     );
 
@@ -115,7 +120,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                     </h2>
                     <button
                         onClick={() => props.onClose()}
-                        class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+                        class="fluent-icon-btn w-7 h-7"
                     >
                         <FiX class="w-4 h-4" />
                     </button>
@@ -166,21 +171,25 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                             <span class="text-sm font-medium text-gray-600 dark:text-gray-300">
                                 {t('settings.show_titles')}
                             </span>
+                            {/* WinUI toggle: hollow with a stroke when off,
+                                accent-filled when on */}
                             <button
                                 role="switch"
                                 aria-checked={showTitles()}
                                 onClick={() => setShowTitles((v) => !v)}
                                 class={cn(
-                                    'relative w-10 h-5 rounded-full transition-colors',
+                                    'relative w-10 h-5 rounded-full transition-colors border',
                                     showTitles()
-                                        ? 'bg-brand-primary'
-                                        : 'bg-gray-300 dark:bg-gray-600',
+                                        ? 'bg-brand-primary border-brand-primary'
+                                        : 'bg-transparent border-gray-500 dark:border-gray-400',
                                 )}
                             >
                                 <span
                                     class={cn(
-                                        'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-                                        showTitles() ? 'left-5' : 'left-0.5',
+                                        'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full transition-all',
+                                        showTitles()
+                                            ? 'left-5.5 bg-white'
+                                            : 'left-1 bg-gray-500 dark:bg-gray-400',
                                     )}
                                 />
                             </button>
@@ -192,22 +201,14 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                         <div class="flex gap-2">
                             <button
                                 onClick={() => props.onExport()}
-                                class={cn(
-                                    'flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm',
-                                    'border border-gray-300 dark:border-gray-600',
-                                    'hover:bg-gray-100 dark:hover:bg-gray-700',
-                                )}
+                                class="flex-1 flex items-center justify-center gap-2 fluent-btn"
                             >
                                 <FiDownload class="w-4 h-4" />
                                 {t('settings.export')}
                             </button>
                             <button
                                 onClick={() => props.onImport()}
-                                class={cn(
-                                    'flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm',
-                                    'border border-gray-300 dark:border-gray-600',
-                                    'hover:bg-gray-100 dark:hover:bg-gray-700',
-                                )}
+                                class="flex-1 flex items-center justify-center gap-2 fluent-btn"
                             >
                                 <FiUpload class="w-4 h-4" />
                                 {t('settings.import')}
@@ -217,10 +218,9 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                             <button
                                 onClick={() => props.onReset()}
                                 class={cn(
-                                    'w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm',
-                                    'border border-red-300/70 dark:border-red-500/40',
+                                    'w-full flex items-center justify-center gap-2 fluent-btn',
                                     'text-red-500 dark:text-red-400',
-                                    'hover:bg-red-50 dark:hover:bg-red-500/10',
+                                    'hover:bg-red-500/8 dark:hover:bg-red-400/10',
                                 )}
                             >
                                 <FiTrash2 class="w-4 h-4" />
@@ -235,23 +235,10 @@ export default function SettingsDialog(props: SettingsDialogProps) {
 
                 {/* Actions */}
                 <div class="flex justify-end gap-2 pt-2">
-                    <button
-                        onClick={() => props.onClose()}
-                        class={cn(
-                            'px-4 py-1.5 rounded-lg text-sm',
-                            'border border-gray-300 dark:border-gray-600',
-                            'hover:bg-gray-100 dark:hover:bg-gray-700',
-                        )}
-                    >
+                    <button onClick={() => props.onClose()} class="px-4 fluent-btn">
                         {t('settings.cancel')}
                     </button>
-                    <button
-                        onClick={handleSave}
-                        class={cn(
-                            'px-4 py-1.5 rounded-lg text-sm text-white',
-                            'bg-brand-primary hover:bg-brand-primary/80',
-                        )}
-                    >
+                    <button onClick={handleSave} class="px-4 fluent-btn-accent">
                         {t('settings.save')}
                     </button>
                 </div>
