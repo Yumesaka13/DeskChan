@@ -18,5 +18,8 @@ Thumbs.db
 .env
 .env.*.local
 
+# Agent instructions — must never be committed (see AGENTS.md itself)
+AGENTS.md
+
 # Tauri
 src-tauri/bindings/

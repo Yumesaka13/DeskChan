@@ -58,15 +58,8 @@ pub fn show(
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 mod menu_ffi {
+    use crate::win32::{wide, ComGuard, ComPtr, Guid};
     use std::ffi::c_void;
-
-    #[repr(C)]
-    struct Guid {
-        d1: u32,
-        d2: u16,
-        d3: u16,
-        d4: [u8; 8],
-    }
 
     // IID_IShellFolder {000214E6-0000-0000-C000-000000000046}
     const IID_ISHELL_FOLDER: Guid = Guid {
@@ -107,7 +100,6 @@ mod menu_ffi {
     const TPM_RIGHTBUTTON: u32 = 0x2;
     const SW_SHOWNORMAL: i32 = 1;
     const WM_NULL: u32 = 0;
-    const COINIT_APARTMENTTHREADED: u32 = 0x2;
 
     #[repr(C)]
     struct Point {
@@ -129,8 +121,6 @@ mod menu_ffi {
     }
 
     extern "system" {
-        fn CoInitializeEx(pv: *mut c_void, co: u32) -> i32;
-        fn CoUninitialize();
         fn CoTaskMemFree(pv: *mut c_void);
         fn SHParseDisplayName(
             name: *const u16,
@@ -152,45 +142,6 @@ mod menu_ffi {
         fn GetCursorPos(p: *mut Point) -> i32;
         fn SetForegroundWindow(hwnd: isize) -> i32;
         fn PostMessageW(hwnd: isize, msg: u32, w: usize, l: isize) -> i32;
-    }
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    /// Balances CoInitializeEx/CoUninitialize (S_OK / S_FALSE must be
-    /// balanced; RPC_E_CHANGED_MODE must not).
-    struct ComGuard(bool);
-    impl ComGuard {
-        fn init() -> Self {
-            Self(unsafe { CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED) } >= 0)
-        }
-    }
-    impl Drop for ComGuard {
-        fn drop(&mut self) {
-            if self.0 {
-                unsafe { CoUninitialize() };
-            }
-        }
-    }
-
-    /// Releases a COM interface pointer on drop (vtable slot 2 = Release).
-    struct ComPtr(*mut c_void);
-    impl ComPtr {
-        unsafe fn vtbl(&self) -> *const usize {
-            *(self.0 as *mut *const usize)
-        }
-    }
-    impl Drop for ComPtr {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                type ReleaseFn = unsafe extern "system" fn(*mut c_void) -> u32;
-                unsafe {
-                    let release: ReleaseFn = std::mem::transmute(*self.vtbl().add(2));
-                    release(self.0);
-                }
-            }
-        }
     }
 
     // ── IContextMenu2/3 menu-message forwarding ─────────────────────────

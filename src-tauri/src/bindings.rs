@@ -44,24 +44,13 @@ pub fn scan_desktop() -> DesktopScan {
 }
 
 /// Re-scan the desktop, preserve cells, rebuild free_icons from current
-/// desktop files. Files already living in a cell are skipped (the old
-/// version duplicated them as free icons). Positions use the -1 sentinel:
-/// the frontend assigns free grid slots on the next reconcile.
+/// desktop files (see desktop::reset_free_icons).
 #[tauri::command]
 pub fn reset_config(app: tauri::AppHandle) -> Result<DeskConfig, String> {
     let cfg_path = config_path(&app);
     // Load existing config to preserve cells; if missing, start fresh
     let mut cfg = config::load_config(&cfg_path).unwrap_or_default();
-    let in_cells: std::collections::HashSet<String> = cfg
-        .cells
-        .iter()
-        .flat_map(|c| c.icons.iter().map(|i| i.path.to_lowercase()))
-        .collect();
-    cfg.free_icons = desktop::list_entries()
-        .into_iter()
-        .filter(|(path, _)| !in_cells.contains(&path.to_string_lossy().to_lowercase()))
-        .map(|(path, is_dir)| desktop::make_icon(&path, is_dir))
-        .collect();
+    desktop::reset_free_icons(&mut cfg);
     config::save_config(&cfg_path, &cfg).map_err(|e| e.to_string())?;
     Ok(cfg)
 }
@@ -69,23 +58,7 @@ pub fn reset_config(app: tauri::AppHandle) -> Result<DeskConfig, String> {
 /// Copy a file to the desktop folder and return its new path.
 #[tauri::command]
 pub fn copy_to_desktop(path: String) -> Result<String, String> {
-    let desktop = desktop::user_desktop_dir();
-    let source = std::path::Path::new(&path);
-    let filename = source.file_name().ok_or("invalid source")?;
-    let dest = desktop.join(filename);
-    let dest = if dest.exists() {
-        // Avoid overwrite: append (n)
-        let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-        let ext = dest.extension().and_then(|s| s.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
-        let mut n = 1;
-        loop {
-            let candidate = desktop.join(format!("{stem} ({n}){ext}"));
-            if !candidate.exists() { break candidate; }
-            n += 1;
-        }
-    } else { dest };
-    std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
-    Ok(dest.to_string_lossy().to_string())
+    desktop::copy_file_to_desktop(&path)
 }
 
 /// Show the native Windows shell context menu for a file at the cursor.
