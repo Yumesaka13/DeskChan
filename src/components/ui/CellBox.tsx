@@ -9,10 +9,12 @@
  * (pinned; single chevron icon).
  */
 import { createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
+import { invoke } from '@tauri-apps/api/core';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { CELL_TITLEBAR_H } from '~/lib/grid';
 import { type Cell } from '@bindings/Cell';
+import { type CellRect } from '@bindings/CellRect';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
@@ -24,8 +26,8 @@ export interface CellBoxProps {
     cell: Cell;
     /** Called when cell position changes after drag */
     onMove: (id: string, x: number, y: number) => void;
-    /** Called when cell size changes after resize */
-    onResize?: (id: string, w: number, h: number) => void;
+    /** Called with the full rect after an edge/corner resize commits */
+    onResize?: (id: string, rect: CellRect) => void;
     /** Called when an icon is clicked (should open file) */
     onOpenIcon: (icon: DesktopIconData) => void;
     /** Called when icons are dropped onto the cell */
@@ -78,9 +80,12 @@ export default function CellBox(props: CellBoxProps) {
     // over a collapsed cell, temporarily unroll it; roll back shortly after
     // the pointer leaves. The hover state itself lives in Desktop (keyed by
     // cell id) so it survives this component being re-created on data change.
-    /** What is actually rendered right now (persisted state + hover). */
+    /** What is actually rendered right now (persisted state + hover).
+     *  An active resize keeps a hover-expanded cell open even if the pointer
+     *  strays outside mid-gesture — otherwise the roll-up would snap the
+     *  geometry out from under the drag. */
     const displayCollapsed = () =>
-        collapsed() && !(props.cell.hover_expand && props.hovered === true);
+        collapsed() && !(props.cell.hover_expand && (props.hovered === true || isResizing()));
     /** Title bar is always reachable on collapsed cells, else it follows the setting. */
     const showTitleBar = () => props.showTitles !== false || collapsed();
 
@@ -129,6 +134,67 @@ export default function CellBox(props: CellBoxProps) {
 
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
+    };
+
+    // --- Resize from any edge or corner (also while rolled up) ---
+    // Live feedback writes styles directly (like drag-move) and the rect is
+    // committed once on mouseup — going through the config every mousemove
+    // would recreate this component per frame (keyed <For>).
+    interface ResizeDir { n?: boolean; s?: boolean; e?: boolean; w?: boolean }
+    const MIN_W = 120;
+    const MIN_H = 80;
+    // A watcher reconcile can recreate this component mid-gesture — the
+    // document listeners must not outlive it.
+    let cancelResize: (() => void) | null = null;
+    onCleanup(() => cancelResize?.());
+    // The curried handler triggers solid/reactivity, but every reactive read
+    // happens at event time (rect snapshotted on mousedown, id on mouseup).
+    // eslint-disable-next-line solid/reactivity
+    const startResize = (dir: ResizeDir) => (e: MouseEvent) => {
+        if (e.button !== 0) return; // right/middle click must never resize
+        e.stopPropagation();
+        e.preventDefault();
+        setIsResizing(true);
+        // Keep the Rust polling loop from re-ordering the window mid-gesture
+        invoke('set_dragging', { dragging: true }).catch(() => {});
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const r0 = { ...props.cell.rect };
+        let last = r0;
+
+        const onMove = (ev: MouseEvent) => {
+            const dx = ev.clientX - startX;
+            const dy = ev.clientY - startY;
+            let { x, y, width, height } = r0;
+            if (dir.e) width = Math.max(MIN_W, r0.width + dx);
+            if (dir.s) height = Math.max(MIN_H, r0.height + dy);
+            if (dir.w) {
+                width = Math.max(MIN_W, r0.width - dx);
+                x = r0.x + (r0.width - width);
+            }
+            if (dir.n) {
+                height = Math.max(MIN_H, r0.height - dy);
+                y = r0.y + (r0.height - height);
+            }
+            last = { x, y, width, height };
+            cellRef.style.left = `${x}px`;
+            cellRef.style.top = `${y}px`;
+            cellRef.style.width = `${width}px`;
+            if (!displayCollapsed()) cellRef.style.height = `${height}px`;
+        };
+        const onUp = () => {
+            cancelResize?.();
+            if (last !== r0) props.onResize?.(props.cell.id, last);
+        };
+        cancelResize = () => {
+            cancelResize = null;
+            setIsResizing(false);
+            invoke('set_dragging', { dragging: false }).catch(() => {});
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
     };
 
     // --- Context menu ---
@@ -305,9 +371,8 @@ export default function CellBox(props: CellBoxProps) {
                             onClick={(e) => { e.stopPropagation(); props.onToggleHoverExpand(props.cell.id); }}
                             onDblClick={(e) => e.stopPropagation()}
                             class={cn(
-                                'p-1 transition-opacity duration-150',
+                                'fluent-icon-btn flex-shrink-0',
                                 'text-gray-500 dark:text-gray-300',
-                                'opacity-40 hover:opacity-100',
                             )}
                             title={t('cell.hover_expand')}
                         >
@@ -328,6 +393,9 @@ export default function CellBox(props: CellBoxProps) {
                 <div
                     class={cn(
                         'flex-1 overflow-y-auto p-2 cell-scrollbar',
+                        // Right margin keeps the scrollbar clear of the 6px
+                        // east resize strip, which paints above this area
+                        'mr-1.5',
                         props.cell.layout === 'Grid'
                             ? 'flex flex-wrap content-start gap-1'
                             : 'flex flex-col gap-0.5',
@@ -358,40 +426,27 @@ export default function CellBox(props: CellBoxProps) {
                     )}
                 </div>
 
-                {/* Resize handle — hidden when rolled up */}
-                {!displayCollapsed() && (
-                    <div
-                        class={cn(
-                            'absolute bottom-0 right-0 w-4 h-4',
-                            'cursor-se-resize',
-                            'hover:bg-brand-primary/20 rounded-bl',
-                        )}
-                        onMouseDown={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        setIsResizing(true);
-                        const startX = e.clientX;
-                        const startY = e.clientY;
-                        const startW = props.cell.rect.width;
-                        const startH = props.cell.rect.height;
-
-                        const handleMouseMove = (ev: MouseEvent) => {
-                            const newW = Math.max(120, startW + (ev.clientX - startX));
-                            const newH = Math.max(80, startH + (ev.clientY - startY));
-                            props.onResize?.(props.cell.id, newW, newH);
-                        };
-
-                        const handleMouseUp = () => {
-                            setIsResizing(false);
-                            document.removeEventListener('mousemove', handleMouseMove);
-                            document.removeEventListener('mouseup', handleMouseUp);
-                        };
-
-                        document.addEventListener('mousemove', handleMouseMove);
-                        document.addEventListener('mouseup', handleMouseUp);
-                    }}
-                />
-                )}
+                {/* Resize handles — every edge and corner, invisible strips.
+                    Rolled-up cells expose the horizontal handles full-height
+                    (vertical resize has no visible effect on a 32px bar). */}
+                <Show
+                    when={!displayCollapsed()}
+                    fallback={
+                        <>
+                            <div class="absolute inset-y-0 left-0 w-1.5 cursor-w-resize" onMouseDown={startResize({ w: true })} />
+                            <div class="absolute inset-y-0 right-0 w-1.5 cursor-e-resize" onMouseDown={startResize({ e: true })} />
+                        </>
+                    }
+                >
+                    <div class="absolute inset-x-2.5 top-0 h-1.5 cursor-n-resize" onMouseDown={startResize({ n: true })} />
+                    <div class="absolute inset-x-2.5 bottom-0 h-1.5 cursor-s-resize" onMouseDown={startResize({ s: true })} />
+                    <div class="absolute inset-y-2.5 left-0 w-1.5 cursor-w-resize" onMouseDown={startResize({ w: true })} />
+                    <div class="absolute inset-y-2.5 right-0 w-1.5 cursor-e-resize" onMouseDown={startResize({ e: true })} />
+                    <div class="absolute left-0 top-0 w-2.5 h-2.5 cursor-nw-resize" onMouseDown={startResize({ n: true, w: true })} />
+                    <div class="absolute right-0 top-0 w-2.5 h-2.5 cursor-ne-resize" onMouseDown={startResize({ n: true, e: true })} />
+                    <div class="absolute left-0 bottom-0 w-2.5 h-2.5 cursor-sw-resize" onMouseDown={startResize({ s: true, w: true })} />
+                    <div class="absolute right-0 bottom-0 w-2.5 h-2.5 cursor-se-resize" onMouseDown={startResize({ s: true, e: true })} />
+                </Show>
             </div>
 
             {/* Context menu */}

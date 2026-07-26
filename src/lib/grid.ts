@@ -145,7 +145,13 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
     const gone = (p: string) => dirs.has(parentDirLower(p)) && !present.has(p.toLowerCase());
 
     const freeKept = cfg.free_icons.filter((i) => !gone(i.path));
-    const cells = cfg.cells.map((c) => ({ ...c, icons: c.icons.filter((i) => !gone(i.path)) }));
+    // Preserve object identity for untouched cells — Desktop's <For> keys by
+    // reference, so a new object recreates the whole CellBox mid-gesture
+    // (dropping live hover/resize state) even when the cell didn't change.
+    const cells = cfg.cells.map((c) => {
+        const icons = c.icons.filter((i) => !gone(i.path));
+        return icons.length === c.icons.length ? c : { ...c, icons };
+    });
 
     const known = new Set([
         ...freeKept.map((i) => i.path.toLowerCase()),

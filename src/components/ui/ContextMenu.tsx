@@ -44,8 +44,8 @@ export default function ContextMenu(props: ContextMenuProps) {
             {/* Main menu */}
             <div
                 class={cn(
-                    'glass-panel context-menu-enter',
-                    'fixed z-[9999] min-w-36 py-1',
+                    'mica-panel context-menu-enter',
+                    'fixed z-[9999] min-w-36 py-1 px-1',
                     'text-sm text-gray-800 dark:text-gray-100',
                     props.class,
                 )}
@@ -67,8 +67,7 @@ export default function ContextMenu(props: ContextMenuProps) {
                             if (item.submenu) showSub(item.submenu, e);
                         }}
                         class={cn(
-                            'w-full flex items-center gap-2 px-3 py-1.5 text-left',
-                            'hover:bg-gray-100 dark:hover:bg-gray-700/60',
+                            'flex items-center gap-2 text-left fluent-menu-item',
                             'disabled:opacity-40 disabled:cursor-not-allowed',
                             item.destructive && 'text-red-500 dark:text-red-400',
                             item.submenu && 'relative',
@@ -86,7 +85,7 @@ export default function ContextMenu(props: ContextMenuProps) {
             {/* Submenu */}
             {subMenu() && (
                 <div
-                    class={cn('glass-panel context-menu-enter fixed z-[9999] min-w-32 py-1 text-sm text-gray-800 dark:text-gray-100')}
+                    class={cn('mica-panel context-menu-enter fixed z-[9999] min-w-32 py-1 px-1 text-sm text-gray-800 dark:text-gray-100')}
                     style={{ left: `${subMenu()!.x}px`, top: `${subMenu()!.y}px` }}
                     role="menu"
                     onPointerDown={(e) => e.stopPropagation()}
@@ -103,8 +102,7 @@ export default function ContextMenu(props: ContextMenuProps) {
                                 }
                             }}
                             class={cn(
-                                'w-full flex items-center gap-2 px-3 py-1.5 text-left whitespace-nowrap',
-                                'hover:bg-gray-100 dark:hover:bg-gray-700/60',
+                                'flex items-center gap-2 text-left whitespace-nowrap fluent-menu-item',
                                 'disabled:opacity-40 disabled:cursor-not-allowed',
                                 item.destructive && 'text-red-500 dark:text-red-400',
                             )}
