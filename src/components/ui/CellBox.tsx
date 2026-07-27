@@ -15,6 +15,7 @@ import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { CELL_TITLEBAR_H } from '~/lib/grid';
 import { activeIcons, totalIconCount } from '~/lib/cell';
+import { snapPosition } from '~/lib/snap';
 import { type Cell } from '@bindings/Cell';
 import { type CellRect } from '@bindings/CellRect';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
@@ -59,6 +60,8 @@ export interface CellBoxProps {
     hovered?: boolean;
     /** Reports pointer enter/leave; Desktop debounces the leave */
     onHover?: (id: string, inside: boolean) => void;
+    /** Other cells' screen rects — drag-move magnetically snaps to them */
+    snapRects?: CellRect[];
     /** Called to delete the cell */
     onDelete: (id: string) => void;
     /** Override class for the cell container */
@@ -157,6 +160,12 @@ export default function CellBox(props: CellBoxProps) {
             x: e.clientX - props.cell.rect.x,
             y: e.clientY - props.cell.rect.y,
         };
+        // What the on-screen box currently measures — snapping must use the
+        // DISPLAYED height so a rolled-up bar butts against neighbors cleanly
+        const snapW = props.cell.rect.width;
+        const snapH = displayCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height;
+        const snapRects = props.snapRects ?? [];
+        let lastPos: { x: number; y: number } | null = null;
 
         const handleMouseMove = (ev: MouseEvent) => {
             const dx = ev.clientX - dragStartPos.x;
@@ -164,21 +173,27 @@ export default function CellBox(props: CellBoxProps) {
             // Only start moving after a 3px threshold (distinguish from click)
             if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
 
-            const newX = ev.clientX - dragOffset.x;
-            const newY = ev.clientY - dragOffset.y;
-            cellRef.style.left = `${newX}px`;
-            cellRef.style.top = `${newY}px`;
+            // Magnetic alignment against the other cells' edges
+            const snapped = snapPosition(
+                ev.clientX - dragOffset.x,
+                ev.clientY - dragOffset.y,
+                snapW,
+                snapH,
+                snapRects,
+            );
+            lastPos = snapped;
+            cellRef.style.left = `${snapped.x}px`;
+            cellRef.style.top = `${snapped.y}px`;
         };
 
-        const handleMouseUp = (ev: MouseEvent) => {
+        const handleMouseUp = () => {
             setIsDragging(false);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
 
-            const newX = ev.clientX - dragOffset.x;
-            const newY = ev.clientY - dragOffset.y;
-            if (newX !== props.cell.rect.x || newY !== props.cell.rect.y) {
-                props.onMove(props.cell.id, Math.max(0, newX), Math.max(0, newY));
+            // Commit exactly what the live preview showed (already snapped)
+            if (lastPos && (lastPos.x !== props.cell.rect.x || lastPos.y !== props.cell.rect.y)) {
+                props.onMove(props.cell.id, Math.max(0, lastPos.x), Math.max(0, lastPos.y));
             }
         };
 

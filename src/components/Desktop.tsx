@@ -681,6 +681,9 @@ export default function Desktop() {
                         }
                         hovered={hoverCellId() === cell.id}
                         onHover={cellHover}
+                        snapRects={(config()?.cells ?? [])
+                            .filter((c) => c.id !== cell.id)
+                            .map(effectiveCellRect)}
                     />
                 )}
             </For>
