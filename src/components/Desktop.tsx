@@ -22,7 +22,7 @@ import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 export default function Desktop() {
@@ -748,7 +748,10 @@ export default function Desktop() {
                             icon: <FiGrid />,
                             submenu: [
                                 {
-                                    label: `${config()?.auto_arrange ? '☑ ' : '☐ '}${t('desktop.context.arrange_auto')}`,
+                                    label: t('desktop.context.arrange_auto'),
+                                    // Fluent menus mark checked items with a
+                                    // checkmark in the icon gutter, not text
+                                    icon: config()?.auto_arrange ? <FiCheck /> : undefined,
                                     onClick: () => {
                                         setConfig((p) => {
                                             if (!p) return p;
@@ -759,7 +762,8 @@ export default function Desktop() {
                                     },
                                 },
                                 {
-                                    label: `${config()?.snap_to_grid ? '☑ ' : '☐ '}${t('desktop.context.arrange_snap')}`,
+                                    label: t('desktop.context.arrange_snap'),
+                                    icon: config()?.snap_to_grid ? <FiCheck /> : undefined,
                                     onClick: () => {
                                         setConfig((p) => {
                                             if (!p) return p;

@@ -21,7 +21,7 @@ import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import { type SubStyle } from '@bindings/SubStyle';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
-import { FiPlus, FiTrash2 } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiTrash2 } from 'solid-icons/fi';
 import { BsCaretDownFill, BsCaretUpFill } from 'solid-icons/bs';
 
 export interface CellBoxProps {
@@ -264,9 +264,11 @@ export default function CellBox(props: CellBoxProps) {
             ? [{
                   label: t('cell.context.sub_style'),
                   submenu: (['Compact', 'Stretch'] as const).map((style) => ({
-                      label: `${props.cell.sub_style === style ? '☑ ' : '☐ '}${t(
+                      label: t(
                           style === 'Compact' ? 'cell.sub_style.compact' : 'cell.sub_style.stretch',
-                      )}`,
+                      ),
+                      // Fluent checkmark in the icon gutter for the active choice
+                      icon: props.cell.sub_style === style ? <FiCheck /> : undefined,
                       onClick: () => props.onSetSubStyle(props.cell.id, style),
                   })),
               }]
