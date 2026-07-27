@@ -63,6 +63,36 @@ pub fn forward_menu_msg(msg: u32, wparam: usize, lparam: isize) -> Option<isize>
     menu_ffi::forward_menu_msg(msg, wparam, lparam)
 }
 
+/// Show the native DESKTOP BACKGROUND context menu (view/sort/refresh,
+/// personalize, display settings, graphics-vendor panels …) at the cursor.
+#[cfg(target_os = "windows")]
+pub fn show_desktop(window: tauri::WebviewWindow) -> Result<(), String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let hwnd = match window.window_handle().ok().map(|h| match h.as_raw() {
+        RawWindowHandle::Win32(w) => w.hwnd.get() as isize,
+        _ => 0isize,
+    }) {
+        Some(h) if h != 0 => h,
+        _ => return Err("no window handle".into()),
+    };
+
+    // Same main-thread hop as `show` — TrackPopupMenuEx needs the thread
+    // that owns the window, and recv() unblocks when the menu closes.
+    let (tx, rx) = std::sync::mpsc::channel();
+    window
+        .run_on_main_thread(move || {
+            let _ = tx.send(unsafe { menu_ffi::show_background_menu(hwnd) });
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|_| "menu closure dropped".to_string())?.map(|_| ())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_desktop(_window: tauri::WebviewWindow) -> Result<(), String> {
+    Err("native context menu not supported on this platform".into())
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn show(
     _window: tauri::WebviewWindow,
@@ -311,7 +341,47 @@ mod menu_ffi {
             return Err("GetUIObjectOf(IContextMenu) failed".into());
         }
         let context_menu = ComPtr(menu_ptr);
+        track_menu(hwnd, &context_menu, extra_items)
+    }
 
+    /// Show the DESKTOP BACKGROUND shell menu (view/sort/refresh, wallpaper
+    /// tools, graphics-vendor panels, personalize, display settings — exactly
+    /// what right-clicking the real desktop offers). The desktop folder's
+    /// view object provides this menu.
+    pub unsafe fn show_background_menu(hwnd: isize) -> Result<Option<u32>, String> {
+        extern "system" {
+            fn SHGetDesktopFolder(ppshf: *mut *mut c_void) -> i32;
+        }
+
+        let _com = ComGuard::init();
+        let mut folder_ptr: *mut c_void = std::ptr::null_mut();
+        if SHGetDesktopFolder(&mut folder_ptr) != 0 || folder_ptr.is_null() {
+            return Err("SHGetDesktopFolder failed".into());
+        }
+        let folder = ComPtr(folder_ptr);
+
+        // IShellFolder vtable slot 8: CreateViewObject
+        type CreateViewObjectFn =
+            unsafe extern "system" fn(*mut c_void, isize, *const Guid, *mut *mut c_void) -> i32;
+        let create_view_object: CreateViewObjectFn = std::mem::transmute(*folder.vtbl().add(8));
+        let mut menu_ptr: *mut c_void = std::ptr::null_mut();
+        if create_view_object(folder.0, hwnd, &IID_ICONTEXT_MENU, &mut menu_ptr) != 0
+            || menu_ptr.is_null()
+        {
+            return Err("CreateViewObject(IContextMenu) failed".into());
+        }
+        let context_menu = ComPtr(menu_ptr);
+        track_menu(hwnd, &context_menu, &[])
+    }
+
+    /// Build the popup for an IContextMenu, run the modal tracking loop at
+    /// the cursor, and dispatch the picked command (appended extra items are
+    /// returned by index; native verbs are invoked in place).
+    unsafe fn track_menu(
+        hwnd: isize,
+        context_menu: &ComPtr,
+        extra_items: &[String],
+    ) -> Result<Option<u32>, String> {
         let hmenu = CreatePopupMenu();
         if hmenu == 0 {
             return Err("CreatePopupMenu failed".into());
@@ -343,7 +413,7 @@ mod menu_ffi {
 
         // Forward menu messages to IContextMenu2/3 while the menu is open —
         // without this, "Send To" / "Open With" submenus stay empty.
-        let _forwarder = MenuMsgForwarder::install(&context_menu);
+        let _forwarder = MenuMsgForwarder::install(context_menu);
 
         // Menus on a NOACTIVATE window need explicit foreground, or the menu
         // won't dismiss when clicking elsewhere (classic tray-menu fix).

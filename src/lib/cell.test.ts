@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
-import { activeIcons, deleteSubCell, removeIcon, totalIconCount, withActiveIcons } from './cell';
+import { activeIcons, allIcons, deleteSubCell, removeIcon, reorderIcons, totalIconCount, withActiveIcons } from './cell';
 
 function icon(id: string): DesktopIcon {
     return { id, name: id, path: `C:\\D\\${id}.txt`, icon_path: null, pos_x: 0, pos_y: 0 };
@@ -19,7 +19,7 @@ function cell(partial?: Partial<Cell>): Cell {
             { id: 's2', title: 'Sub 2', icons: [icon('c'), icon('d')] },
         ],
         active_sub: null,
-        sub_style: 'Compact',
+        sub_style: 'Compact', show_title: true,
         ...partial,
     };
 }
@@ -57,6 +57,31 @@ describe('removeIcon', () => {
     });
 });
 
+describe('allIcons', () => {
+    it('spans the own tab and every sub-box', () => {
+        expect(allIcons(cell()).map((i) => i.id)).toEqual(['a', 'b', 'c', 'd']);
+    });
+});
+
+describe('reorderIcons', () => {
+    const list = [icon('a'), icon('b'), icon('c')];
+
+    it('moves before and after a target', () => {
+        expect(reorderIcons(list, 'c', 'a', true).map((i) => i.id)).toEqual(['c', 'a', 'b']);
+        expect(reorderIcons(list, 'a', 'c', false).map((i) => i.id)).toEqual(['b', 'c', 'a']);
+    });
+
+    it('moves to the end when there is no target', () => {
+        expect(reorderIcons(list, 'a', null, false).map((i) => i.id)).toEqual(['b', 'c', 'a']);
+    });
+
+    it('returns the same array for no-ops', () => {
+        expect(reorderIcons(list, 'a', 'a', true)).toBe(list);
+        expect(reorderIcons(list, 'a', 'b', true)).toBe(list); // already before b
+        expect(reorderIcons(list, 'ghost', 'a', true)).toBe(list);
+    });
+});
+
 describe('deleteSubCell', () => {
     it('moves the sub icons into the own tab and clears the selection', () => {
         const c = cell({ active_sub: 's2' });
@@ -72,3 +97,4 @@ describe('deleteSubCell', () => {
         expect(next.active_sub).toBe('s1');
     });
 });
+

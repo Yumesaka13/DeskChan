@@ -9,19 +9,20 @@
  * auto (roll up on leave, expand on hover; up+down carets) vs manual
  * (pinned open; single caret).
  */
-import { createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
+import { createEffect, createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { CELL_TITLEBAR_H } from '~/lib/grid';
 import { activeIcons, totalIconCount } from '~/lib/cell';
+import { snapPosition } from '~/lib/snap';
 import { type Cell } from '@bindings/Cell';
 import { type CellRect } from '@bindings/CellRect';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import { type SubStyle } from '@bindings/SubStyle';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
-import { FiPlus, FiTrash2 } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiTrash2 } from 'solid-icons/fi';
 import { BsCaretDownFill, BsCaretUpFill } from 'solid-icons/bs';
 
 export interface CellBoxProps {
@@ -53,12 +54,14 @@ export interface CellBoxProps {
     onDeleteSub: (id: string, subId: string) => void;
     /** Called to change how the sub-box tabs size themselves */
     onSetSubStyle: (id: string, style: SubStyle) => void;
-    /** Whether cell title bars are shown (collapsed cells always keep theirs) */
-    showTitles?: boolean;
+    /** Called to toggle this cell's title-bar visibility */
+    onToggleShowTitle: (id: string) => void;
     /** Live hover state — owned by Desktop so it survives cell re-creation */
     hovered?: boolean;
     /** Reports pointer enter/leave; Desktop debounces the leave */
     onHover?: (id: string, inside: boolean) => void;
+    /** Other cells' screen rects — drag-move magnetically snaps to them */
+    snapRects?: CellRect[];
     /** Called to delete the cell */
     onDelete: (id: string) => void;
     /** Override class for the cell container */
@@ -133,8 +136,27 @@ export default function CellBox(props: CellBoxProps) {
      *  geometry out from under the drag. */
     const displayCollapsed = () =>
         collapsed() && !(props.cell.hover_expand && (props.hovered === true || isResizing()));
-    /** Title bar is always reachable on collapsed cells, else it follows the setting. */
-    const showTitleBar = () => props.showTitles !== false || collapsed();
+    /** Title bar follows the per-cell setting while the cell is DISPLAYED
+     *  expanded; a rolled-up cell always shows the bar (it is all there is).
+     *  Keying off displayCollapsed — not the persisted flag — is what lets
+     *  hover-expanded (auto) cells actually hide their title. */
+    const showTitleBar = () => props.cell.show_title || displayCollapsed();
+
+    // Roll-up animation window: the raised layer is held while the height
+    // animates shut, or the still-tall box would pop under its neighbors.
+    const [rolling, setRolling] = createSignal(false);
+    let rollTimer: ReturnType<typeof setTimeout> | null = null;
+    let wasOpen = !displayCollapsed();
+    createEffect(() => {
+        const open = !displayCollapsed();
+        if (!open && wasOpen) {
+            setRolling(true);
+            if (rollTimer) clearTimeout(rollTimer);
+            rollTimer = setTimeout(() => setRolling(false), 250); // > 200ms anim
+        }
+        wasOpen = open;
+    });
+    onCleanup(() => { if (rollTimer) clearTimeout(rollTimer); });
 
     let cellRef!: HTMLDivElement;
     let dragOffset = { x: 0, y: 0 };
@@ -154,6 +176,12 @@ export default function CellBox(props: CellBoxProps) {
             x: e.clientX - props.cell.rect.x,
             y: e.clientY - props.cell.rect.y,
         };
+        // What the on-screen box currently measures — snapping must use the
+        // DISPLAYED height so a rolled-up bar butts against neighbors cleanly
+        const snapW = props.cell.rect.width;
+        const snapH = displayCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height;
+        const snapRects = props.snapRects ?? [];
+        let lastPos: { x: number; y: number } | null = null;
 
         const handleMouseMove = (ev: MouseEvent) => {
             const dx = ev.clientX - dragStartPos.x;
@@ -161,21 +189,27 @@ export default function CellBox(props: CellBoxProps) {
             // Only start moving after a 3px threshold (distinguish from click)
             if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
 
-            const newX = ev.clientX - dragOffset.x;
-            const newY = ev.clientY - dragOffset.y;
-            cellRef.style.left = `${newX}px`;
-            cellRef.style.top = `${newY}px`;
+            // Magnetic alignment against the other cells' edges
+            const snapped = snapPosition(
+                ev.clientX - dragOffset.x,
+                ev.clientY - dragOffset.y,
+                snapW,
+                snapH,
+                snapRects,
+            );
+            lastPos = snapped;
+            cellRef.style.left = `${snapped.x}px`;
+            cellRef.style.top = `${snapped.y}px`;
         };
 
-        const handleMouseUp = (ev: MouseEvent) => {
+        const handleMouseUp = () => {
             setIsDragging(false);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
 
-            const newX = ev.clientX - dragOffset.x;
-            const newY = ev.clientY - dragOffset.y;
-            if (newX !== props.cell.rect.x || newY !== props.cell.rect.y) {
-                props.onMove(props.cell.id, Math.max(0, newX), Math.max(0, newY));
+            // Commit exactly what the live preview showed (already snapped)
+            if (lastPos && (lastPos.x !== props.cell.rect.x || lastPos.y !== props.cell.rect.y)) {
+                props.onMove(props.cell.id, Math.max(0, lastPos.x), Math.max(0, lastPos.y));
             }
         };
 
@@ -260,13 +294,20 @@ export default function CellBox(props: CellBoxProps) {
             onClick: () => props.onCreateSub(props.cell.id),
         },
         // Tab sizing choice only matters once sub-boxes exist
+        {
+            label: t('cell.context.show_title'),
+            icon: props.cell.show_title ? <FiCheck /> : undefined,
+            onClick: () => props.onToggleShowTitle(props.cell.id),
+        },
         ...(props.cell.sub_cells.length > 0
             ? [{
                   label: t('cell.context.sub_style'),
                   submenu: (['Compact', 'Stretch'] as const).map((style) => ({
-                      label: `${props.cell.sub_style === style ? '☑ ' : '☐ '}${t(
+                      label: t(
                           style === 'Compact' ? 'cell.sub_style.compact' : 'cell.sub_style.stretch',
-                      )}`,
+                      ),
+                      // Fluent checkmark in the icon gutter for the active choice
+                      icon: props.cell.sub_style === style ? <FiCheck /> : undefined,
                       onClick: () => props.onSetSubStyle(props.cell.id, style),
                   })),
               }]
@@ -361,6 +402,9 @@ export default function CellBox(props: CellBoxProps) {
                     onClick={() => props.onSelectSub(props.cell.id, subId)}
                     onDblClick={(e) => {
                         e.stopPropagation();
+                        // The cell-rename editor lives in the title bar —
+                        // don't arm it invisibly while the bar is hidden
+                        if (subId === null && !showTitleBar()) return;
                         setEditing({ subId });
                     }}
                     onContextMenu={(e) => {
@@ -398,11 +442,13 @@ export default function CellBox(props: CellBoxProps) {
                     'absolute flex flex-col overflow-hidden',
                     'min-w-[120px]',
                     !displayCollapsed() && 'min-h-[80px]',
-                    // Cells sit ABOVE the free-icon layer (free icons render
-                    // later in the DOM and would otherwise paint on top);
-                    // collapsed cells are raised further so neither hover
-                    // roll-up nor the collapse animation pops content in front
-                    collapsed() ? 'z-30' : 'z-10',
+                    // Layering (all above the free-icon layer): rolled-up
+                    // bars lowest, pinned-open cells above them, and a
+                    // hover-expanded cell on top of everything — held there
+                    // through the roll-up animation to avoid pop-under.
+                    (collapsed() && !displayCollapsed()) || rolling()
+                        ? 'z-40'
+                        : displayCollapsed() ? 'z-10' : 'z-20',
                     isDragging() && 'cursor-grabbing shadow-2xl',
                     // Smooth Coodesker-style roll-up/down (height) + shadow.
                     // Disabled during live resize so the cell tracks the cursor.
@@ -522,7 +568,7 @@ export default function CellBox(props: CellBoxProps) {
                     ) : (
                         <For each={activeIcons(props.cell)}>
                             {(icon) => (
-                                <div data-icon>
+                                <div data-icon data-icon-id={icon.id}>
                                     <DesktopIconComponent
                                         icon={icon}
                                         onOpen={props.onOpenIcon}

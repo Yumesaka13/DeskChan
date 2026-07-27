@@ -4,12 +4,13 @@ export const enUS: Translations = {
     'app.name': 'DeskChan Desktop Box',
     'app.desc': 'Desktop Fence Tool',
 
-    'cell.empty_hint': 'Drag icons here or right-click to add',
+    'cell.empty_hint': 'Drag icons here',
     'cell.context.new_sub': 'New Sub-box',
     'cell.context.delete_sub': 'Delete Sub-box',
     'cell.context.sub_style': 'Sub-box Style',
     'cell.sub_style.compact': 'Compact',
     'cell.sub_style.stretch': 'Fill Width',
+    'cell.context.show_title': 'Show Title',
     'cell.context.delete_cell': 'Delete Cell',
     'cell.hover_expand': 'Expand on hover',
 
@@ -24,6 +25,9 @@ export const enUS: Translations = {
     'desktop.context.arrangement': 'Arrangement',
     'desktop.context.arrange_auto': 'Auto-Arrange',
     'desktop.context.arrange_snap': 'Snap to Grid',
+    'desktop.context.personalize': 'Personalize',
+    'desktop.context.display_settings': 'Display Settings',
+    'desktop.context.system_menu': 'More System Options',
     'desktop.context.exit': 'Exit DeskChan',
 
     'organize.folders': 'Folders',
@@ -49,10 +53,8 @@ export const enUS: Translations = {
 
     'settings.theme': 'Theme',
     'settings.language': 'Language',
-    'settings.show_titles': 'Show Titles',
     'settings.title': 'Settings',
-    'settings.save': 'Save',
-    'settings.cancel': 'Cancel',
+    'settings.close': 'Close',
     'settings.tab.general': 'General',
     'settings.tab.appearance': 'Appearance',
     'settings.tab.data': 'Data',

@@ -41,6 +41,30 @@ export function totalIconCount(c: Cell): number {
     return c.icons.length + c.sub_cells.reduce((n, s) => n + s.icons.length, 0);
 }
 
+/** Every icon in the cell — own list plus every sub-box. */
+export function allIcons(c: Cell): DesktopIcon[] {
+    return [...c.icons, ...c.sub_cells.flatMap((s) => s.icons)];
+}
+
+/** Reorder within one icon list: move `dragId` before/after `targetId`
+ *  (or to the end when targetId is null). Returns the SAME array when
+ *  nothing changes, so callers can skip re-render/save. */
+export function reorderIcons(
+    icons: DesktopIcon[],
+    dragId: string,
+    targetId: string | null,
+    before: boolean,
+): DesktopIcon[] {
+    const from = icons.findIndex((i) => i.id === dragId);
+    if (from < 0 || dragId === targetId) return icons;
+    const without = icons.filter((i) => i.id !== dragId);
+    let at = targetId ? without.findIndex((i) => i.id === targetId) : without.length;
+    if (at < 0) at = without.length;
+    else if (!before && targetId) at += 1;
+    const next = [...without.slice(0, at), icons[from]!, ...without.slice(at)];
+    return next.every((icon, n) => icon === icons[n]) ? icons : next;
+}
+
 /** Delete a sub-box; its icons are preserved by moving them to the cell's
  *  own (first) tab, and the selection falls back there when needed. */
 export function deleteSubCell(c: Cell, subId: string): Cell {

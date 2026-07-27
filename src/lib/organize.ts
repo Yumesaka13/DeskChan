@@ -124,11 +124,12 @@ export function organizeConfig(
             opacity: 0.85,
             layout: 'Grid',
             collapsed: false,
-            hover_expand: true,
+            hover_expand: false,
             icons,
             sub_cells: [],
             active_sub: null,
             sub_style: 'Compact',
+            show_title: true,
         });
         curX += CELL_W + GAP;
         rowMaxH = Math.max(rowMaxH, height);

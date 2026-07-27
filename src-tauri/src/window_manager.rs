@@ -590,7 +590,10 @@ fn polling_loop(_app: tauri::AppHandle, _state: Arc<DeskState>) {}
 /// The frontend downscales to 48px CSS, staying crisp at any DPI.
 #[cfg(target_os = "windows")]
 pub fn get_file_icon_base64(path: &str) -> Result<String, String> {
-    let (pixels, size) = icon_ffi::extract_icon_rgba(path)?;
+    // Prefer a real shell thumbnail (images, videos, PDFs with providers);
+    // files without one fall back to the crisp icon pipeline.
+    let (pixels, size) = icon_ffi::extract_thumbnail_rgba(path, 96)
+        .map_or_else(|| icon_ffi::extract_icon_rgba(path), Ok)?;
 
     use image::{ImageBuffer, ImageEncoder, Rgba};
     let mut img = ImageBuffer::<Rgba<u8>, _>::from_raw(size, size, pixels)
@@ -680,6 +683,13 @@ mod icon_ffi {
         d2: 0x582E,
         d3: 0x4017,
         d4: [0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50],
+    };
+    // IID_IShellItemImageFactory {BCC18B79-BA16-442F-80C4-8A59C30C463B}
+    const IID_SHELL_ITEM_IMAGE_FACTORY: Guid = Guid {
+        d1: 0xBCC18B79,
+        d2: 0xBA16,
+        d3: 0x442F,
+        d4: [0x80, 0xC4, 0x8A, 0x59, 0xC3, 0x0C, 0x46, 0x3B],
     };
 
     const SHGFI_ICON: u32 = 0x100;
@@ -830,6 +840,166 @@ mod icon_ffi {
             }
         }
         !any || (max_x <= 64 && max_y <= 64)
+    }
+
+    /// Shell thumbnail (images/videos/anything with a thumbnail provider) as
+    /// (rgba_pixels, size). None when the file type has no thumbnail — the
+    /// caller falls back to the icon pipeline. SIIGBF_THUMBNAILONLY makes
+    /// icon-only files fail instead of returning a blurry scaled icon.
+    pub fn extract_thumbnail_rgba(path: &str, size: i32) -> Option<(Vec<u8>, u32)> {
+        const SIIGBF_BIGGERSIZEOK: u32 = 0x1;
+        const SIIGBF_THUMBNAILONLY: u32 = 0x8;
+
+        #[repr(C)]
+        struct SizeStruct {
+            cx: i32,
+            cy: i32,
+        }
+        #[repr(C)]
+        struct Bitmap {
+            bmType: i32,
+            bmWidth: i32,
+            bmHeight: i32,
+            bmWidthBytes: i32,
+            bmPlanes: u16,
+            bmBitsPixel: u16,
+            bmBits: *mut c_void,
+        }
+
+        extern "system" {
+            fn SHCreateItemFromParsingName(
+                path: *const u16,
+                pbc: *mut c_void,
+                riid: *const Guid,
+                ppv: *mut *mut c_void,
+            ) -> i32;
+            fn GetObjectW(h: isize, cb: i32, pv: *mut c_void) -> i32;
+            fn GetDIBits(
+                hdc: isize,
+                hbm: isize,
+                start: u32,
+                lines: u32,
+                bits: *mut c_void,
+                bmi: *mut BitmapInfo,
+                usage: u32,
+            ) -> i32;
+        }
+
+        let _com = ComGuard::init();
+        let wide_path = crate::win32::wide(path);
+        unsafe {
+            let mut item: *mut c_void = std::ptr::null_mut();
+            if SHCreateItemFromParsingName(
+                wide_path.as_ptr(),
+                std::ptr::null_mut(),
+                &IID_SHELL_ITEM_IMAGE_FACTORY,
+                &mut item,
+            ) != 0
+                || item.is_null()
+            {
+                return None;
+            }
+            let factory = crate::win32::ComPtr(item);
+
+            // IShellItemImageFactory vtable: 0-2 IUnknown, 3 GetImage
+            type GetImageFn =
+                unsafe extern "system" fn(*mut c_void, SizeStruct, u32, *mut isize) -> i32;
+            let get_image: GetImageFn = std::mem::transmute(*factory.vtbl().add(3));
+            let mut hbm: isize = 0;
+            if get_image(
+                factory.0,
+                SizeStruct { cx: size, cy: size },
+                SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK,
+                &mut hbm,
+            ) != 0
+                || hbm == 0
+            {
+                return None;
+            }
+            struct BitmapFree(isize);
+            impl Drop for BitmapFree {
+                fn drop(&mut self) {
+                    unsafe { DeleteObject(self.0) };
+                }
+            }
+            let _hbm_free = BitmapFree(hbm);
+
+            let mut bm = std::mem::zeroed::<Bitmap>();
+            if GetObjectW(hbm, std::mem::size_of::<Bitmap>() as i32, &mut bm as *mut _ as _) == 0
+                || bm.bmWidth <= 0
+                || bm.bmHeight <= 0
+            {
+                return None;
+            }
+            // Thumbnails are not necessarily square — letterbox onto a square
+            // canvas would distort; instead just read the pixels and let the
+            // frontend's object-contain do the fitting. Encode as a square by
+            // using the LARGER edge; the canvas stays transparent around it.
+            let (w, h) = (bm.bmWidth, bm.bmHeight);
+
+            let hdc = CreateCompatibleDC(0);
+            if hdc == 0 {
+                return None;
+            }
+            struct DcFree(isize);
+            impl Drop for DcFree {
+                fn drop(&mut self) {
+                    unsafe { DeleteDC(self.0) };
+                }
+            }
+            let _dc_free = DcFree(hdc);
+
+            let mut bmi = BitmapInfo {
+                bmiHeader: BitmapInfoHeader {
+                    biSize: std::mem::size_of::<BitmapInfoHeader>() as u32,
+                    biWidth: w,
+                    biHeight: -h, // top-down
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+            };
+            let mut bgra = vec![0u8; (w * h * 4) as usize];
+            if GetDIBits(hdc, hbm, 0, h as u32, bgra.as_mut_ptr() as _, &mut bmi, DIB_RGB_COLORS)
+                == 0
+            {
+                return None;
+            }
+
+            // BGRA → RGBA on a square transparent canvas (edge = max(w, h))
+            let edge = w.max(h) as u32;
+            let (off_x, off_y) = (((edge as i32 - w) / 2) as u32, ((edge as i32 - h) / 2) as u32);
+            let mut pixels = vec![0u8; (edge * edge * 4) as usize];
+            for row in 0..h as u32 {
+                for col in 0..w as u32 {
+                    let src = ((row * w as u32 + col) * 4) as usize;
+                    let dst = (((row + off_y) * edge + (col + off_x)) * 4) as usize;
+                    pixels[dst] = bgra[src + 2];
+                    pixels[dst + 1] = bgra[src + 1];
+                    pixels[dst + 2] = bgra[src];
+                    pixels[dst + 3] = bgra[src + 3];
+                }
+            }
+            // Providers that ignore the alpha channel leave it all-zero →
+            // treat as fully opaque (same fix as legacy mask icons)
+            if pixels
+                .chunks_exact(4)
+                .all(|c| c[3] == 0)
+            {
+                for row in 0..h as u32 {
+                    for col in 0..w as u32 {
+                        let dst = (((row + off_y) * edge + (col + off_x)) * 4) as usize;
+                        pixels[dst + 3] = 255;
+                    }
+                }
+            }
+            Some((pixels, edge))
+        }
     }
 
     /// Extract the best available icon as (rgba_pixels, size).

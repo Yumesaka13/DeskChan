@@ -23,6 +23,7 @@ static CONFIG_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mute
 #[tauri::command] pub async fn get_config(app: tauri::AppHandle) -> Result<DeskConfig, String> { let _g = CONFIG_LOCK.lock().await; config::load_config(&config_path(&app)).map_err(|e| e.to_string()) }
 #[tauri::command] pub async fn save_config(app: tauri::AppHandle, cfg: DeskConfig) -> Result<(), String> { let _g = CONFIG_LOCK.lock().await; config::save_config(&config_path(&app), &cfg).map_err(|e| e.to_string()) }
 #[tauri::command] pub async fn open_file(path: String) -> Result<(), String> { tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string()) }
+#[tauri::command] pub async fn open_url(url: String) -> Result<(), String> { tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string()) }
 #[tauri::command] pub fn set_dragging(state: tauri::State<'_, Arc<DeskState>>, dragging: bool) { state.dragging.store(dragging, Ordering::Relaxed); }
 #[tauri::command] pub async fn get_file_icon(path: String) -> Result<String, String> { crate::window_manager::get_file_icon_base64(&path) }
 
@@ -103,6 +104,14 @@ pub async fn show_icon_menu(
     extra_items: Vec<String>,
 ) -> Result<Option<u32>, String> {
     crate::shell_menu::show(window, paths, extra_items)
+}
+
+/// Show the native desktop-background context menu (personalize, display
+/// settings, graphics-vendor panels …) at the cursor. Async for the same
+/// reason as show_icon_menu.
+#[tauri::command]
+pub async fn show_desktop_menu(window: tauri::WebviewWindow) -> Result<(), String> {
+    crate::shell_menu::show_desktop(window)
 }
 
 // Note: one-click organize lives in TS (src/lib/organize.ts) — it needs

@@ -14,7 +14,7 @@ import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import { arrangeFreeIcons, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid } from '~/lib/grid';
-import { deleteSubCell, removeIcon, withActiveIcons } from '~/lib/cell';
+import { allIcons, deleteSubCell, removeIcon, reorderIcons, withActiveIcons } from '~/lib/cell';
 import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
 import { getCachedIcon } from '~/lib/icon-cache';
@@ -22,7 +22,7 @@ import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid, FiImage, FiMonitor, FiMoreHorizontal } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 export default function Desktop() {
@@ -251,6 +251,17 @@ export default function Desktop() {
                         }),
                     };
                 });
+            } else if (targetCell && targetCell === ds.cellId && ds.source === 'cell') {
+                // In-cell reorder: the drop position picks the new slot
+                // (before/after the icon under the cursor, or to the end)
+                const el = document.elementFromPoint(ds.x, ds.y)?.closest('[data-icon-id]');
+                const targetId = el?.getAttribute('data-icon-id') ?? null;
+                const before = el
+                    ? ds.x < el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2
+                    : false;
+                updateCell(ds.cellId, (c) =>
+                    withActiveIcons(c, (icons) => reorderIcons(icons, ds.iconId, targetId, before)),
+                );
             } else if (!targetCell) {
                 if (ds.source === 'cell') {
                     const pos = resolveDropPos(ds.x - ds.offsetX, ds.y - ds.offsetY, ds.iconId);
@@ -364,10 +375,11 @@ export default function Desktop() {
     const addFreeIconAt = (filePath: string, x: number, y: number) => {
         setConfig((p) => {
             if (!p) return p;
-            // The folder watcher may have reconciled it in already — dedupe by path
+            // The folder watcher may have reconciled it in already — dedupe by
+            // path across free icons AND every cell container (subs included)
             const low = filePath.toLowerCase();
             if (p.free_icons.some((i) => i.path.toLowerCase() === low) ||
-                p.cells.some((c) => c.icons.some((i) => i.path.toLowerCase() === low))) {
+                p.cells.some((c) => allIcons(c).some((i) => i.path.toLowerCase() === low))) {
                 return p;
             }
             const icon: DIcon = {
@@ -440,12 +452,16 @@ export default function Desktop() {
             background_color: null,
             opacity: 0.85,
             layout: 'Grid',
+            // Pinned (manual) mode: hover_expand=true with collapsed=false is
+            // an inconsistent in-between where the first mode-button click
+            // seems to do nothing.
             collapsed: false,
-            hover_expand: true,
+            hover_expand: false,
             icons: [],
             sub_cells: [],
             active_sub: null,
             sub_style: 'Compact',
+            show_title: true,
         };
         setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
     };
@@ -661,9 +677,14 @@ export default function Desktop() {
                         onSetSubStyle={(id, style) =>
                             updateCell(id, (c) => ({ ...c, sub_style: style }))
                         }
-                        showTitles={config()?.show_titles ?? true}
+                        onToggleShowTitle={(id) =>
+                            updateCell(id, (c) => ({ ...c, show_title: !c.show_title }))
+                        }
                         hovered={hoverCellId() === cell.id}
                         onHover={cellHover}
+                        snapRects={(config()?.cells ?? [])
+                            .filter((c) => c.id !== cell.id)
+                            .map(effectiveCellRect)}
                     />
                 )}
             </For>
@@ -745,7 +766,10 @@ export default function Desktop() {
                             icon: <FiGrid />,
                             submenu: [
                                 {
-                                    label: `${config()?.auto_arrange ? '☑ ' : '☐ '}${t('desktop.context.arrange_auto')}`,
+                                    label: t('desktop.context.arrange_auto'),
+                                    // Fluent menus mark checked items with a
+                                    // checkmark in the icon gutter, not text
+                                    icon: config()?.auto_arrange ? <FiCheck /> : undefined,
                                     onClick: () => {
                                         setConfig((p) => {
                                             if (!p) return p;
@@ -756,7 +780,8 @@ export default function Desktop() {
                                     },
                                 },
                                 {
-                                    label: `${config()?.snap_to_grid ? '☑ ' : '☐ '}${t('desktop.context.arrange_snap')}`,
+                                    label: t('desktop.context.arrange_snap'),
+                                    icon: config()?.snap_to_grid ? <FiCheck /> : undefined,
                                     onClick: () => {
                                         setConfig((p) => {
                                             if (!p) return p;
@@ -780,6 +805,23 @@ export default function Desktop() {
                             label: t('desktop.context.organize'),
                             icon: <FiGrid />,
                             onClick: () => { void organizeDesktop(); },
+                        },
+                        { separator: true },
+                        // The system entries the native desktop menu offers
+                        {
+                            label: t('desktop.context.personalize'),
+                            icon: <FiImage />,
+                            onClick: () => { invoke('open_url', { url: 'ms-settings:personalization' }).catch(() => {}); },
+                        },
+                        {
+                            label: t('desktop.context.display_settings'),
+                            icon: <FiMonitor />,
+                            onClick: () => { invoke('open_url', { url: 'ms-settings:display' }).catch(() => {}); },
+                        },
+                        {
+                            label: t('desktop.context.system_menu'),
+                            icon: <FiMoreHorizontal />,
+                            onClick: () => { invoke('show_desktop_menu').catch(() => {}); },
                         },
                         { separator: true },
                         {
@@ -806,10 +848,6 @@ export default function Desktop() {
             <SettingsDialog
                 open={settingsOpen()}
                 onClose={() => setSettingsOpen(false)}
-                showTitles={config()?.show_titles ?? true}
-                onSave={({ showTitles }) =>
-                    setConfig((p) => (p ? { ...p, show_titles: showTitles } : p))
-                }
                 onExport={() => { void exportConfig(); }}
                 onImport={() => { void importConfig(); }}
                 onReset={() => { void resetConfig(); }}

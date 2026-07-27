@@ -86,6 +86,8 @@ pub fn run() {
             bindings::export_config,
             bindings::import_config,
             bindings::show_icon_menu,
+            bindings::show_desktop_menu,
+            bindings::open_url,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

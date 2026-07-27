@@ -11,6 +11,7 @@ export interface Translations {
     'cell.context.sub_style': string;
     'cell.sub_style.compact': string;
     'cell.sub_style.stretch': string;
+    'cell.context.show_title': string;
     'cell.context.delete_cell': string;
     'cell.hover_expand': string;
 
@@ -27,6 +28,9 @@ export interface Translations {
     'desktop.context.arrangement': string;
     'desktop.context.arrange_auto': string;
     'desktop.context.arrange_snap': string;
+    'desktop.context.personalize': string;
+    'desktop.context.display_settings': string;
+    'desktop.context.system_menu': string;
     'desktop.context.exit': string;
 
     // Organize categories (cell titles)
@@ -56,10 +60,8 @@ export interface Translations {
     // Settings
     'settings.theme': string;
     'settings.language': string;
-    'settings.show_titles': string;
     'settings.title': string;
-    'settings.save': string;
-    'settings.cancel': string;
+    'settings.close': string;
     'settings.tab.general': string;
     'settings.tab.appearance': string;
     'settings.tab.data': string;
@@ -81,12 +83,13 @@ export const zhCN: Translations = {
     'app.name': 'DeskChan 桌面盒子',
     'app.desc': '桌面分区盒子工具',
 
-    'cell.empty_hint': '拖入图标或右键添加',
+    'cell.empty_hint': '拖入图标',
     'cell.context.new_sub': '创建子盒子',
     'cell.context.delete_sub': '删除子盒子',
     'cell.context.sub_style': '子格子样式',
     'cell.sub_style.compact': '紧凑',
     'cell.sub_style.stretch': '自适应占满',
+    'cell.context.show_title': '显示标题',
     'cell.context.delete_cell': '删除格子',
     'cell.hover_expand': '悬停时自动展开',
 
@@ -101,6 +104,9 @@ export const zhCN: Translations = {
     'desktop.context.arrangement': '排列方式',
     'desktop.context.arrange_auto': '自动排列',
     'desktop.context.arrange_snap': '对齐到网格',
+    'desktop.context.personalize': '个性化',
+    'desktop.context.display_settings': '显示设置',
+    'desktop.context.system_menu': '更多系统选项',
     'desktop.context.exit': '退出 DeskChan',
 
     'organize.folders': '文件夹',
@@ -126,10 +132,8 @@ export const zhCN: Translations = {
 
     'settings.theme': '主题',
     'settings.language': '语言',
-    'settings.show_titles': '显示标题',
     'settings.title': '设置',
-    'settings.save': '保存',
-    'settings.cancel': '取消',
+    'settings.close': '关闭',
     'settings.tab.general': '通用',
     'settings.tab.appearance': '外观',
     'settings.tab.data': '数据',
