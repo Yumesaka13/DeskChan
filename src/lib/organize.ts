@@ -124,7 +124,7 @@ export function organizeConfig(
             opacity: 0.85,
             layout: 'Grid',
             collapsed: false,
-            hover_expand: true,
+            hover_expand: false,
             icons,
             sub_cells: [],
             active_sub: null,

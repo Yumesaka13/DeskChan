@@ -440,8 +440,11 @@ export default function Desktop() {
             background_color: null,
             opacity: 0.85,
             layout: 'Grid',
+            // Pinned (manual) mode: hover_expand=true with collapsed=false is
+            // an inconsistent in-between where the first mode-button click
+            // seems to do nothing.
             collapsed: false,
-            hover_expand: true,
+            hover_expand: false,
             icons: [],
             sub_cells: [],
             active_sub: null,
