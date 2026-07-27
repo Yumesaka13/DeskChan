@@ -1,7 +1,7 @@
 ﻿import { describe, expect, it } from 'vitest';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
-import { activeIcons, deleteSubCell, removeIcon, reorderIcons, totalIconCount, withActiveIcons } from './cell';
+import { activeIcons, allIcons, deleteSubCell, removeIcon, reorderIcons, totalIconCount, withActiveIcons } from './cell';
 
 function icon(id: string): DesktopIcon {
     return { id, name: id, path: `C:\\D\\${id}.txt`, icon_path: null, pos_x: 0, pos_y: 0 };
@@ -54,6 +54,12 @@ describe('removeIcon', () => {
         expect(totalIconCount(removeIcon(c, 'a'))).toBe(3);
         expect(totalIconCount(removeIcon(c, 'c'))).toBe(3);
         expect(removeIcon(c, 'c').sub_cells[1]!.icons.map((i) => i.id)).toEqual(['d']);
+    });
+});
+
+describe('allIcons', () => {
+    it('spans the own tab and every sub-box', () => {
+        expect(allIcons(cell()).map((i) => i.id)).toEqual(['a', 'b', 'c', 'd']);
     });
 });
 

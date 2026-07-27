@@ -14,7 +14,7 @@ import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import { arrangeFreeIcons, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid } from '~/lib/grid';
-import { deleteSubCell, removeIcon, reorderIcons, withActiveIcons } from '~/lib/cell';
+import { allIcons, deleteSubCell, removeIcon, reorderIcons, withActiveIcons } from '~/lib/cell';
 import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
 import { getCachedIcon } from '~/lib/icon-cache';
@@ -375,10 +375,11 @@ export default function Desktop() {
     const addFreeIconAt = (filePath: string, x: number, y: number) => {
         setConfig((p) => {
             if (!p) return p;
-            // The folder watcher may have reconciled it in already — dedupe by path
+            // The folder watcher may have reconciled it in already — dedupe by
+            // path across free icons AND every cell container (subs included)
             const low = filePath.toLowerCase();
             if (p.free_icons.some((i) => i.path.toLowerCase() === low) ||
-                p.cells.some((c) => c.icons.some((i) => i.path.toLowerCase() === low))) {
+                p.cells.some((c) => allIcons(c).some((i) => i.path.toLowerCase() === low))) {
                 return p;
             }
             const icon: DIcon = {

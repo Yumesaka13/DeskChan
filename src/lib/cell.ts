@@ -41,6 +41,11 @@ export function totalIconCount(c: Cell): number {
     return c.icons.length + c.sub_cells.reduce((n, s) => n + s.icons.length, 0);
 }
 
+/** Every icon in the cell — own list plus every sub-box. */
+export function allIcons(c: Cell): DesktopIcon[] {
+    return [...c.icons, ...c.sub_cells.flatMap((s) => s.icons)];
+}
+
 /** Reorder within one icon list: move `dragId` before/after `targetId`
  *  (or to the end when targetId is null). Returns the SAME array when
  *  nothing changes, so callers can skip re-render/save. */

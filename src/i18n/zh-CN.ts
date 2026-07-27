@@ -83,7 +83,7 @@ export const zhCN: Translations = {
     'app.name': 'DeskChan 桌面盒子',
     'app.desc': '桌面分区盒子工具',
 
-    'cell.empty_hint': '拖入图标或右键添加',
+    'cell.empty_hint': '拖入图标',
     'cell.context.new_sub': '创建子盒子',
     'cell.context.delete_sub': '删除子盒子',
     'cell.context.sub_style': '子格子样式',

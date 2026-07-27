@@ -4,7 +4,7 @@ export const enUS: Translations = {
     'app.name': 'DeskChan Desktop Box',
     'app.desc': 'Desktop Fence Tool',
 
-    'cell.empty_hint': 'Drag icons here or right-click to add',
+    'cell.empty_hint': 'Drag icons here',
     'cell.context.new_sub': 'New Sub-box',
     'cell.context.delete_sub': 'Delete Sub-box',
     'cell.context.sub_style': 'Sub-box Style',

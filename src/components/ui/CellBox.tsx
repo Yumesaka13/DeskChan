@@ -402,6 +402,9 @@ export default function CellBox(props: CellBoxProps) {
                     onClick={() => props.onSelectSub(props.cell.id, subId)}
                     onDblClick={(e) => {
                         e.stopPropagation();
+                        // The cell-rename editor lives in the title bar —
+                        // don't arm it invisibly while the bar is hidden
+                        if (subId === null && !showTitleBar()) return;
                         setEditing({ subId });
                     }}
                     onContextMenu={(e) => {
