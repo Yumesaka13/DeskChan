@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
 import { activeIcons, deleteSubCell, removeIcon, totalIconCount, withActiveIcons } from './cell';
@@ -19,7 +19,7 @@ function cell(partial?: Partial<Cell>): Cell {
             { id: 's2', title: 'Sub 2', icons: [icon('c'), icon('d')] },
         ],
         active_sub: null,
-        sub_style: 'Compact',
+        sub_style: 'Compact', show_title: true,
         ...partial,
     };
 }
@@ -72,3 +72,4 @@ describe('deleteSubCell', () => {
         expect(next.active_sub).toBe('s1');
     });
 });
+

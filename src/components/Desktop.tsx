@@ -449,6 +449,7 @@ export default function Desktop() {
             sub_cells: [],
             active_sub: null,
             sub_style: 'Compact',
+            show_title: true,
         };
         setConfig((p) => (p ? { ...p, cells: [...p.cells, newCell] } : p));
     };
@@ -664,7 +665,9 @@ export default function Desktop() {
                         onSetSubStyle={(id, style) =>
                             updateCell(id, (c) => ({ ...c, sub_style: style }))
                         }
-                        showTitles={config()?.show_titles ?? true}
+                        onToggleShowTitle={(id) =>
+                            updateCell(id, (c) => ({ ...c, show_title: !c.show_title }))
+                        }
                         hovered={hoverCellId() === cell.id}
                         onHover={cellHover}
                     />
@@ -813,10 +816,6 @@ export default function Desktop() {
             <SettingsDialog
                 open={settingsOpen()}
                 onClose={() => setSettingsOpen(false)}
-                showTitles={config()?.show_titles ?? true}
-                onSave={({ showTitles }) =>
-                    setConfig((p) => (p ? { ...p, show_titles: showTitles } : p))
-                }
                 onExport={() => { void exportConfig(); }}
                 onImport={() => { void importConfig(); }}
                 onReset={() => { void resetConfig(); }}

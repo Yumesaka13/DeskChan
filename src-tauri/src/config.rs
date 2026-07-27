@@ -104,6 +104,10 @@ pub struct Cell {
     /// How the sub-box tabs size themselves
     #[serde(default)]
     pub sub_style: SubStyle,
+    /// Whether this cell shows its title bar while expanded (a rolled-up
+    /// cell always shows the bar — it is all there is to grab)
+    #[serde(default = "default_true")]
+    pub show_title: bool,
 }
 
 fn default_true() -> bool {
@@ -128,8 +132,6 @@ pub struct DeskConfig {
     /// Snap free icons to grid positions when dragged
     #[serde(default)]
     pub snap_to_grid: bool,
-    /// Whether to show cell titles
-    pub show_titles: bool,
     /// Theme: "light", "dark", "auto"
     pub theme: String,
 }
@@ -142,7 +144,6 @@ impl Default for DeskConfig {
             free_icons: Vec::new(),
             auto_arrange: true,
             snap_to_grid: true,
-            show_titles: true,
             theme: "auto".to_string(),
         }
     }

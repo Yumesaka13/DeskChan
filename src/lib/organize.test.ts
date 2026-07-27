@@ -21,13 +21,14 @@ function cell(title: string, icons: DesktopIcon[] = []): Cell {
         rect: { x: 900, y: 500, width: 320, height: 240 },
         background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
         hover_expand: true, icons, sub_cells: [], active_sub: null, sub_style: 'Compact',
+        show_title: true,
     };
 }
 
 function cfg(partial?: Partial<DeskConfig>): DeskConfig {
     return {
         version: 3, cells: [], free_icons: [], auto_arrange: false,
-        snap_to_grid: true, show_titles: true, theme: 'auto',
+        snap_to_grid: true, theme: 'auto',
         ...partial,
     };
 }

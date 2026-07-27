@@ -53,8 +53,8 @@ export interface CellBoxProps {
     onDeleteSub: (id: string, subId: string) => void;
     /** Called to change how the sub-box tabs size themselves */
     onSetSubStyle: (id: string, style: SubStyle) => void;
-    /** Whether cell title bars are shown (collapsed cells always keep theirs) */
-    showTitles?: boolean;
+    /** Called to toggle this cell's title-bar visibility */
+    onToggleShowTitle: (id: string) => void;
     /** Live hover state — owned by Desktop so it survives cell re-creation */
     hovered?: boolean;
     /** Reports pointer enter/leave; Desktop debounces the leave */
@@ -133,8 +133,11 @@ export default function CellBox(props: CellBoxProps) {
      *  geometry out from under the drag. */
     const displayCollapsed = () =>
         collapsed() && !(props.cell.hover_expand && (props.hovered === true || isResizing()));
-    /** Title bar is always reachable on collapsed cells, else it follows the setting. */
-    const showTitleBar = () => props.showTitles !== false || collapsed();
+    /** Title bar follows the per-cell setting while the cell is DISPLAYED
+     *  expanded; a rolled-up cell always shows the bar (it is all there is).
+     *  Keying off displayCollapsed — not the persisted flag — is what lets
+     *  hover-expanded (auto) cells actually hide their title. */
+    const showTitleBar = () => props.cell.show_title || displayCollapsed();
 
     let cellRef!: HTMLDivElement;
     let dragOffset = { x: 0, y: 0 };
@@ -260,6 +263,11 @@ export default function CellBox(props: CellBoxProps) {
             onClick: () => props.onCreateSub(props.cell.id),
         },
         // Tab sizing choice only matters once sub-boxes exist
+        {
+            label: t('cell.context.show_title'),
+            icon: props.cell.show_title ? <FiCheck /> : undefined,
+            onClick: () => props.onToggleShowTitle(props.cell.id),
+        },
         ...(props.cell.sub_cells.length > 0
             ? [{
                   label: t('cell.context.sub_style'),

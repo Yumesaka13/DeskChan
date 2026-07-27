@@ -11,6 +11,7 @@ export interface Translations {
     'cell.context.sub_style': string;
     'cell.sub_style.compact': string;
     'cell.sub_style.stretch': string;
+    'cell.context.show_title': string;
     'cell.context.delete_cell': string;
     'cell.hover_expand': string;
 
@@ -56,10 +57,8 @@ export interface Translations {
     // Settings
     'settings.theme': string;
     'settings.language': string;
-    'settings.show_titles': string;
     'settings.title': string;
-    'settings.save': string;
-    'settings.cancel': string;
+    'settings.close': string;
     'settings.tab.general': string;
     'settings.tab.appearance': string;
     'settings.tab.data': string;
@@ -87,6 +86,7 @@ export const zhCN: Translations = {
     'cell.context.sub_style': '子格子样式',
     'cell.sub_style.compact': '紧凑',
     'cell.sub_style.stretch': '自适应占满',
+    'cell.context.show_title': '显示标题',
     'cell.context.delete_cell': '删除格子',
     'cell.hover_expand': '悬停时自动展开',
 
@@ -126,10 +126,8 @@ export const zhCN: Translations = {
 
     'settings.theme': '主题',
     'settings.language': '语言',
-    'settings.show_titles': '显示标题',
     'settings.title': '设置',
-    'settings.save': '保存',
-    'settings.cancel': '取消',
+    'settings.close': '关闭',
     'settings.tab.general': '通用',
     'settings.tab.appearance': '外观',
     'settings.tab.data': '数据',

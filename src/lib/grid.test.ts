@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import type { DeskConfig } from '@bindings/DeskConfig';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
 import type { DesktopScan } from '@bindings/DesktopScan';
@@ -17,7 +17,6 @@ function cfg(partial?: Partial<DeskConfig>): DeskConfig {
         free_icons: [],
         auto_arrange: false,
         snap_to_grid: true,
-        show_titles: true,
         theme: 'auto',
         ...partial,
     };
@@ -55,7 +54,7 @@ describe('allocateSlots', () => {
     });
 
     it('reuses slots instead of going offscreen when the desktop is full', () => {
-        const slots = allocateSlots(10, [], [], { width: 100, height: 120 }); // 1×1 grid
+        const slots = allocateSlots(10, [], [], { width: 100, height: 120 }); // 1脳1 grid
         expect(slots).toHaveLength(10);
         expect(slots.every((s) => s.x === GRID.originX && s.y === GRID.originY)).toBe(true);
     });
@@ -77,7 +76,7 @@ describe('reconcileConfig', () => {
                 id: 'c1', title: 'Cell',
                 rect: { x: 500, y: 500, width: 320, height: 240 },
                 background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
-                hover_expand: true, sub_cells: [], active_sub: null, sub_style: 'Compact',
+                hover_expand: true, sub_cells: [], active_sub: null, sub_style: 'Compact', show_title: true,
                 icons: [icon('C:\\Users\\me\\Desktop\\also-gone.txt', 0, 0)],
             }],
         });
@@ -99,12 +98,12 @@ describe('reconcileConfig', () => {
                 id: 'c1', title: 'Cell',
                 rect: { x: 500, y: 500, width: 320, height: 240 },
                 background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
-                hover_expand: true, sub_cells: [], active_sub: null, sub_style: 'Compact',
+                hover_expand: true, sub_cells: [], active_sub: null, sub_style: 'Compact', show_title: true,
                 icons: [icon(path, 0, 0)],
             }],
         });
         const result = reconcileConfig(config, scan([path.toUpperCase()]), VIEWPORT);
-        expect(result).toBe(config); // path match is case-insensitive → no change
+        expect(result).toBe(config); // path match is case-insensitive 鈫?no change
     });
 
     it('assigns slots to sentinel (-1) icons without moving placed ones', () => {
@@ -140,3 +139,4 @@ describe('arrangeFreeIcons', () => {
             .toEqual({ x: GRID.originX, y: GRID.originY + GRID.cellH });
     });
 });
+
