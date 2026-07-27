@@ -25,6 +25,9 @@ export const enUS: Translations = {
     'desktop.context.arrangement': 'Arrangement',
     'desktop.context.arrange_auto': 'Auto-Arrange',
     'desktop.context.arrange_snap': 'Snap to Grid',
+    'desktop.context.personalize': 'Personalize',
+    'desktop.context.display_settings': 'Display Settings',
+    'desktop.context.system_menu': 'More System Options',
     'desktop.context.exit': 'Exit DeskChan',
 
     'organize.folders': 'Folders',

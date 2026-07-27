@@ -22,7 +22,7 @@ import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid, FiImage, FiMonitor, FiMoreHorizontal } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 export default function Desktop() {
@@ -790,6 +790,23 @@ export default function Desktop() {
                             label: t('desktop.context.organize'),
                             icon: <FiGrid />,
                             onClick: () => { void organizeDesktop(); },
+                        },
+                        { separator: true },
+                        // The system entries the native desktop menu offers
+                        {
+                            label: t('desktop.context.personalize'),
+                            icon: <FiImage />,
+                            onClick: () => { invoke('open_url', { url: 'ms-settings:personalization' }).catch(() => {}); },
+                        },
+                        {
+                            label: t('desktop.context.display_settings'),
+                            icon: <FiMonitor />,
+                            onClick: () => { invoke('open_url', { url: 'ms-settings:display' }).catch(() => {}); },
+                        },
+                        {
+                            label: t('desktop.context.system_menu'),
+                            icon: <FiMoreHorizontal />,
+                            onClick: () => { invoke('show_desktop_menu').catch(() => {}); },
                         },
                         { separator: true },
                         {

@@ -28,6 +28,9 @@ export interface Translations {
     'desktop.context.arrangement': string;
     'desktop.context.arrange_auto': string;
     'desktop.context.arrange_snap': string;
+    'desktop.context.personalize': string;
+    'desktop.context.display_settings': string;
+    'desktop.context.system_menu': string;
     'desktop.context.exit': string;
 
     // Organize categories (cell titles)
@@ -101,6 +104,9 @@ export const zhCN: Translations = {
     'desktop.context.arrangement': '排列方式',
     'desktop.context.arrange_auto': '自动排列',
     'desktop.context.arrange_snap': '对齐到网格',
+    'desktop.context.personalize': '个性化',
+    'desktop.context.display_settings': '显示设置',
+    'desktop.context.system_menu': '更多系统选项',
     'desktop.context.exit': '退出 DeskChan',
 
     'organize.folders': '文件夹',
