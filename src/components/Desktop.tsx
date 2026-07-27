@@ -14,7 +14,7 @@ import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import { arrangeFreeIcons, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid } from '~/lib/grid';
-import { deleteSubCell, removeIcon, withActiveIcons } from '~/lib/cell';
+import { deleteSubCell, removeIcon, reorderIcons, withActiveIcons } from '~/lib/cell';
 import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
 import { getCachedIcon } from '~/lib/icon-cache';
@@ -251,6 +251,17 @@ export default function Desktop() {
                         }),
                     };
                 });
+            } else if (targetCell && targetCell === ds.cellId && ds.source === 'cell') {
+                // In-cell reorder: the drop position picks the new slot
+                // (before/after the icon under the cursor, or to the end)
+                const el = document.elementFromPoint(ds.x, ds.y)?.closest('[data-icon-id]');
+                const targetId = el?.getAttribute('data-icon-id') ?? null;
+                const before = el
+                    ? ds.x < el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2
+                    : false;
+                updateCell(ds.cellId, (c) =>
+                    withActiveIcons(c, (icons) => reorderIcons(icons, ds.iconId, targetId, before)),
+                );
             } else if (!targetCell) {
                 if (ds.source === 'cell') {
                     const pos = resolveDropPos(ds.x - ds.offsetX, ds.y - ds.offsetY, ds.iconId);

@@ -532,7 +532,7 @@ export default function CellBox(props: CellBoxProps) {
                     ) : (
                         <For each={activeIcons(props.cell)}>
                             {(icon) => (
-                                <div data-icon>
+                                <div data-icon data-icon-id={icon.id}>
                                     <DesktopIconComponent
                                         icon={icon}
                                         onOpen={props.onOpenIcon}

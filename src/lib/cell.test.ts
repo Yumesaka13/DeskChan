@@ -1,7 +1,7 @@
 ﻿import { describe, expect, it } from 'vitest';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
-import { activeIcons, deleteSubCell, removeIcon, totalIconCount, withActiveIcons } from './cell';
+import { activeIcons, deleteSubCell, removeIcon, reorderIcons, totalIconCount, withActiveIcons } from './cell';
 
 function icon(id: string): DesktopIcon {
     return { id, name: id, path: `C:\\D\\${id}.txt`, icon_path: null, pos_x: 0, pos_y: 0 };
@@ -54,6 +54,25 @@ describe('removeIcon', () => {
         expect(totalIconCount(removeIcon(c, 'a'))).toBe(3);
         expect(totalIconCount(removeIcon(c, 'c'))).toBe(3);
         expect(removeIcon(c, 'c').sub_cells[1]!.icons.map((i) => i.id)).toEqual(['d']);
+    });
+});
+
+describe('reorderIcons', () => {
+    const list = [icon('a'), icon('b'), icon('c')];
+
+    it('moves before and after a target', () => {
+        expect(reorderIcons(list, 'c', 'a', true).map((i) => i.id)).toEqual(['c', 'a', 'b']);
+        expect(reorderIcons(list, 'a', 'c', false).map((i) => i.id)).toEqual(['b', 'c', 'a']);
+    });
+
+    it('moves to the end when there is no target', () => {
+        expect(reorderIcons(list, 'a', null, false).map((i) => i.id)).toEqual(['b', 'c', 'a']);
+    });
+
+    it('returns the same array for no-ops', () => {
+        expect(reorderIcons(list, 'a', 'a', true)).toBe(list);
+        expect(reorderIcons(list, 'a', 'b', true)).toBe(list); // already before b
+        expect(reorderIcons(list, 'ghost', 'a', true)).toBe(list);
     });
 });
 
