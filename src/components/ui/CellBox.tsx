@@ -9,7 +9,7 @@
  * auto (roll up on leave, expand on hover; up+down carets) vs manual
  * (pinned open; single caret).
  */
-import { createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
+import { createEffect, createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
@@ -141,6 +141,22 @@ export default function CellBox(props: CellBoxProps) {
      *  Keying off displayCollapsed — not the persisted flag — is what lets
      *  hover-expanded (auto) cells actually hide their title. */
     const showTitleBar = () => props.cell.show_title || displayCollapsed();
+
+    // Roll-up animation window: the raised layer is held while the height
+    // animates shut, or the still-tall box would pop under its neighbors.
+    const [rolling, setRolling] = createSignal(false);
+    let rollTimer: ReturnType<typeof setTimeout> | null = null;
+    let wasOpen = !displayCollapsed();
+    createEffect(() => {
+        const open = !displayCollapsed();
+        if (!open && wasOpen) {
+            setRolling(true);
+            if (rollTimer) clearTimeout(rollTimer);
+            rollTimer = setTimeout(() => setRolling(false), 250); // > 200ms anim
+        }
+        wasOpen = open;
+    });
+    onCleanup(() => { if (rollTimer) clearTimeout(rollTimer); });
 
     let cellRef!: HTMLDivElement;
     let dragOffset = { x: 0, y: 0 };
@@ -423,11 +439,13 @@ export default function CellBox(props: CellBoxProps) {
                     'absolute flex flex-col overflow-hidden',
                     'min-w-[120px]',
                     !displayCollapsed() && 'min-h-[80px]',
-                    // Cells sit ABOVE the free-icon layer (free icons render
-                    // later in the DOM and would otherwise paint on top);
-                    // collapsed cells are raised further so neither hover
-                    // roll-up nor the collapse animation pops content in front
-                    collapsed() ? 'z-30' : 'z-10',
+                    // Layering (all above the free-icon layer): rolled-up
+                    // bars lowest, pinned-open cells above them, and a
+                    // hover-expanded cell on top of everything — held there
+                    // through the roll-up animation to avoid pop-under.
+                    (collapsed() && !displayCollapsed()) || rolling()
+                        ? 'z-40'
+                        : displayCollapsed() ? 'z-10' : 'z-20',
                     isDragging() && 'cursor-grabbing shadow-2xl',
                     // Smooth Coodesker-style roll-up/down (height) + shadow.
                     // Disabled during live resize so the cell tracks the cursor.
