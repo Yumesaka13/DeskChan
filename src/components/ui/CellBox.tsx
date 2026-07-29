@@ -1,5 +1,5 @@
 /**
- * CellBox — a draggable, resizable desktop cell (fence/box) that holds icons.
+ * CellBox - a draggable, resizable desktop cell (fence/box) that holds icons.
  * Drag the cell by its title bar or empty area; resize from any edge/corner.
  * Drop external icons onto the cell to add them (to the active tab).
  * Sub-boxes: cells can contain tabbed sub-boxes, rendered as a WinUI-style
@@ -18,8 +18,10 @@ import { activeIcons, totalIconCount } from '~/lib/cell';
 import { snapPosition } from '~/lib/snap';
 import { type Cell } from '@bindings/Cell';
 import { type CellRect } from '@bindings/CellRect';
+import { type CellLayout } from '@bindings/CellLayout';
 import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
 import { type SubStyle } from '@bindings/SubStyle';
+import { type SortDirection, type SortField } from '~/lib/grid';
 import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import { FiCheck, FiPlus, FiTrash2 } from 'solid-icons/fi';
@@ -40,8 +42,15 @@ export interface CellBoxProps {
     onDragStart?: (iconId: string, cellId: string, icon: DesktopIconData, e: PointerEvent) => void;
     /** Called to toggle hover-expand mode (auto-unroll while hovered) */
     onToggleHoverExpand: (id: string) => void;
-    /** Called on icon right-click — shows the native shell menu */
-    onIconMenu?: (cellId: string, icon: DesktopIconData) => void;
+    /** Called on icon right-click - shows the native shell menu */
+    onIconMenu?: (cellId: string, icon: DesktopIconData, event: MouseEvent) => void;
+    /** Shared desktop-wide icon selection (supports Ctrl selection across cells). */
+    selectedIconIds?: ReadonlySet<string>;
+    onSelectIcon?: (cellId: string, icon: DesktopIconData, event: MouseEvent) => void;
+    onClearIconSelection?: () => void;
+    showFileExtensions?: boolean;
+    /** Extra white contrast layer applied only within this cell. */
+    desktopOverlayOpacity?: number;
     /** Called to rename the cell (double-click on the title) */
     onRename: (id: string, title: string) => void;
     /** Called to create a new sub-box tab */
@@ -54,13 +63,16 @@ export interface CellBoxProps {
     onDeleteSub: (id: string, subId: string) => void;
     /** Called to change how the sub-box tabs size themselves */
     onSetSubStyle: (id: string, style: SubStyle) => void;
+    /** Change the active cell's icon arrangement. */
+    onSetLayout: (id: string, layout: CellLayout) => void;
+    onArrangeIcons: (id: string, field: SortField, direction: SortDirection) => void;
     /** Called to toggle this cell's title-bar visibility */
     onToggleShowTitle: (id: string) => void;
-    /** Live hover state — owned by Desktop so it survives cell re-creation */
+    /** Live hover state - owned by Desktop so it survives cell re-creation */
     hovered?: boolean;
     /** Reports pointer enter/leave; Desktop debounces the leave */
     onHover?: (id: string, inside: boolean) => void;
-    /** Other cells' screen rects — drag-move magnetically snaps to them */
+    /** Other cells' screen rects - drag-move magnetically snaps to them */
     snapRects?: CellRect[];
     /** Called to delete the cell */
     onDelete: (id: string) => void;
@@ -72,7 +84,7 @@ export interface CellBoxProps {
     contentClass?: string;
 }
 
-/** Inline rename editor — commits on Enter/blur, cancels on Escape. */
+/** Inline rename editor - commits on Enter/blur, cancels on Escape. */
 function RenameInput(props: {
     value: string;
     onCommit: (value: string) => void;
@@ -124,6 +136,8 @@ export default function CellBox(props: CellBoxProps) {
     const [isDragging, setIsDragging] = createSignal(false);
     // Live-resize must bypass the height transition, or the cell lags the cursor
     const [isResizing, setIsResizing] = createSignal(false);
+    const sortField = () => props.cell.sort_field as SortField;
+    const sortDirection = () => props.cell.sort_direction as SortDirection;
     const collapsed = () => props.cell.collapsed;
 
     // Hover-expand (Coodesker's second collapse mode): while the pointer is
@@ -132,13 +146,13 @@ export default function CellBox(props: CellBoxProps) {
     // cell id) so it survives this component being re-created on data change.
     /** What is actually rendered right now (persisted state + hover).
      *  An active resize keeps a hover-expanded cell open even if the pointer
-     *  strays outside mid-gesture — otherwise the roll-up would snap the
+     *  strays outside mid-gesture - otherwise the roll-up would snap the
      *  geometry out from under the drag. */
     const displayCollapsed = () =>
         collapsed() && !(props.cell.hover_expand && (props.hovered === true || isResizing()));
     /** Title bar follows the per-cell setting while the cell is DISPLAYED
      *  expanded; a rolled-up cell always shows the bar (it is all there is).
-     *  Keying off displayCollapsed — not the persisted flag — is what lets
+     *  Keying off displayCollapsed - not the persisted flag - is what lets
      *  hover-expanded (auto) cells actually hide their title. */
     const showTitleBar = () => props.cell.show_title || displayCollapsed();
 
@@ -168,6 +182,11 @@ export default function CellBox(props: CellBoxProps) {
         const target = e.target as HTMLElement;
         if (target.closest('[data-icon]') || target.closest('button') || target.closest('input')) return;
 
+        if (target.closest('[data-icon-area]')) {
+            props.onClearIconSelection?.();
+            return;
+        }
+
         e.preventDefault();
         setIsDragging(true);
 
@@ -176,7 +195,7 @@ export default function CellBox(props: CellBoxProps) {
             x: e.clientX - props.cell.rect.x,
             y: e.clientY - props.cell.rect.y,
         };
-        // What the on-screen box currently measures — snapping must use the
+        // What the on-screen box currently measures - snapping must use the
         // DISPLAYED height so a rolled-up bar butts against neighbors cleanly
         const snapW = props.cell.rect.width;
         const snapH = displayCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height;
@@ -219,12 +238,12 @@ export default function CellBox(props: CellBoxProps) {
 
     // --- Resize from any edge or corner (also while rolled up) ---
     // Live feedback writes styles directly (like drag-move) and the rect is
-    // committed once on mouseup — going through the config every mousemove
+    // committed once on mouseup - going through the config every mousemove
     // would recreate this component per frame (keyed <For>).
     interface ResizeDir { n?: boolean; s?: boolean; e?: boolean; w?: boolean }
     const MIN_W = 120;
     const MIN_H = 80;
-    // A watcher reconcile can recreate this component mid-gesture — the
+    // A watcher reconcile can recreate this component mid-gesture - the
     // document listeners must not outlive it.
     let cancelResize: (() => void) | null = null;
     onCleanup(() => cancelResize?.());
@@ -299,6 +318,37 @@ export default function CellBox(props: CellBoxProps) {
             icon: props.cell.show_title ? <FiCheck /> : undefined,
             onClick: () => props.onToggleShowTitle(props.cell.id),
         },
+        {
+            label: t('cell.context.arrangement'),
+            submenu: [
+                ...(['Grid', 'List'] as const).map((layout) => ({
+                    label: t(layout === 'Grid' ? 'cell.layout.grid' : 'cell.layout.list'),
+                    icon: props.cell.layout === layout ? <FiCheck /> : undefined,
+                    onClick: () => props.onSetLayout(props.cell.id, layout),
+                })),
+                { separator: true },
+                {
+                    label: t('desktop.context.arrange_auto'),
+                    onClick: () => props.onArrangeIcons(props.cell.id, sortField(), sortDirection()),
+                },
+                {
+                    label: t('desktop.context.sort_by'),
+                    submenu: (['name', 'type', 'modified'] as const).map((field) => ({
+                        label: t(`desktop.context.sort_${field === 'modified' ? 'modified' : field}`),
+                        icon: sortField() === field ? <FiCheck /> : undefined,
+                        onClick: () => props.onArrangeIcons(props.cell.id, field, sortDirection()),
+                    })),
+                },
+                {
+                    label: t('desktop.context.sort_direction'),
+                    submenu: (['asc', 'desc'] as const).map((direction) => ({
+                        label: t(direction === 'asc' ? 'desktop.context.sort_ascending' : 'desktop.context.sort_descending'),
+                        icon: sortDirection() === direction ? <FiCheck /> : undefined,
+                        onClick: () => props.onArrangeIcons(props.cell.id, sortField(), direction),
+                    })),
+                },
+            ],
+        },
         ...(props.cell.sub_cells.length > 0
             ? [{
                   label: t('cell.context.sub_style'),
@@ -371,12 +421,16 @@ export default function CellBox(props: CellBoxProps) {
     const bgStyle = createMemo(() => {
         const bg = props.cell.background_color;
         const opacity = props.cell.opacity;
+        const overlay = Math.max(0, Math.min(props.desktopOverlayOpacity ?? 0, 0.5));
+        const overlayStyle = overlay > 0
+            ? { 'background-image': `linear-gradient(rgba(255, 255, 255, ${overlay}), rgba(255, 255, 255, ${overlay}))` }
+            : {};
         if (bg) {
-            // Solid style objects take kebab-case CSS property names —
+            // Solid style objects take kebab-case CSS property names -
             // camelCase keys are silently ignored by style.setProperty.
-            return { 'background-color': bg, opacity };
+            return { 'background-color': bg, opacity, ...overlayStyle };
         }
-        return { opacity };
+        return { opacity, ...overlayStyle };
     });
 
     /** One tab of the strip: the implicit own tab (subId null) or a sub-box.
@@ -402,7 +456,7 @@ export default function CellBox(props: CellBoxProps) {
                     onClick={() => props.onSelectSub(props.cell.id, subId)}
                     onDblClick={(e) => {
                         e.stopPropagation();
-                        // The cell-rename editor lives in the title bar —
+                        // The cell-rename editor lives in the title bar -
                         // don't arm it invisibly while the bar is hidden
                         if (subId === null && !showTitleBar()) return;
                         setEditing({ subId });
@@ -444,7 +498,7 @@ export default function CellBox(props: CellBoxProps) {
                     !displayCollapsed() && 'min-h-[80px]',
                     // Layering (all above the free-icon layer): rolled-up
                     // bars lowest, pinned-open cells above them, and a
-                    // hover-expanded cell on top of everything — held there
+                    // hover-expanded cell on top of everything - held there
                     // through the roll-up animation to avoid pop-under.
                     (collapsed() && !displayCollapsed()) || rolling()
                         ? 'z-40'
@@ -467,7 +521,7 @@ export default function CellBox(props: CellBoxProps) {
                 onMouseEnter={() => props.onHover?.(props.cell.id, true)}
                 onMouseLeave={() => props.onHover?.(props.cell.id, false)}
             >
-                {/* Title bar — double-click the title text to rename */}
+                {/* Title bar - double-click the title text to rename */}
                 <Show when={showTitleBar()}>
                     <div
                         class={cn(
@@ -504,7 +558,7 @@ export default function CellBox(props: CellBoxProps) {
                                 {props.cell.title}
                             </span>
                         </Show>
-                        {/* Icon count badge — visible when rolled up */}
+                        {/* Icon count badge - visible when rolled up */}
                         {displayCollapsed() && (
                             <span class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums">
                                 {totalIconCount(props.cell)}
@@ -534,7 +588,7 @@ export default function CellBox(props: CellBoxProps) {
                     </div>
                 </Show>
 
-                {/* Sub-box tab strip — the cell's own icons are the first tab */}
+                {/* Sub-box tab strip - the cell's own icons are the first tab */}
                 <Show when={props.cell.sub_cells.length > 0}>
                     <div
                         class={cn(
@@ -547,9 +601,10 @@ export default function CellBox(props: CellBoxProps) {
                     </div>
                 </Show>
 
-                {/* Icon area (active tab) — stays mounted while collapsed
+                {/* Icon area (active tab) - stays mounted while collapsed
                     (clipped by the animated container height) */}
                 <div
+                    data-icon-area
                     class={cn(
                         'flex-1 overflow-y-auto p-2 cell-scrollbar',
                         // Right margin keeps the scrollbar clear of the 6px
@@ -571,12 +626,22 @@ export default function CellBox(props: CellBoxProps) {
                                 <div data-icon data-icon-id={icon.id}>
                                     <DesktopIconComponent
                                         icon={icon}
+                                        showFileExtensions={props.showFileExtensions}
+                                        listLayout={props.cell.layout === 'List'}
+                                        class={props.cell.layout === 'List'
+                                            ? 'w-full flex-row justify-start gap-2 px-2 py-1'
+                                            : undefined}
+                                        labelClass={props.cell.layout === 'List'
+                                            ? 'flex-1 max-w-none text-left line-clamp-1'
+                                            : undefined}
+                                        selected={props.selectedIconIds?.has(icon.id) ?? false}
+                                        onSelect={(selected, event) => props.onSelectIcon?.(props.cell.id, selected, event)}
                                         onOpen={props.onOpenIcon}
                                         onDragStart={props.onDragStart
                                             ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
                                             : undefined}
                                         onNativeMenu={props.onIconMenu
-                                            ? (ic) => props.onIconMenu!(props.cell.id, ic)
+                                            ? (ic, event) => props.onIconMenu!(props.cell.id, ic, event)
                                             : undefined}
                                     />
                                 </div>
@@ -585,7 +650,7 @@ export default function CellBox(props: CellBoxProps) {
                     )}
                 </div>
 
-                {/* Resize handles — every edge and corner, invisible strips.
+                {/* Resize handles - every edge and corner, invisible strips.
                     Rolled-up cells expose the horizontal handles full-height
                     (vertical resize has no visible effect on a 32px bar). */}
                 <Show

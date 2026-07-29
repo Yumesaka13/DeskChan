@@ -1,6 +1,6 @@
 //! Shared raw Win32 / COM FFI helpers.
 //!
-//! No external windows crate on purpose — see Cargo.toml: raw FFI avoids
+//! No external windows crate on purpose - see Cargo.toml: raw FFI avoids
 //! version conflicts with Tauri's internal windows-core dependency. Every
 //! declaration used by more than one module lives here; single-use externs
 //! stay next to their call site.
@@ -41,7 +41,7 @@ extern "system" {
 const COINIT_APARTMENTTHREADED: u32 = 0x2;
 
 /// Balances CoInitializeEx/CoUninitialize (shell APIs want COM ready on the
-/// calling thread — Tauri command threads are not guaranteed to be).
+/// calling thread - Tauri command threads are not guaranteed to be).
 /// S_OK / S_FALSE (>= 0) must be balanced; RPC_E_CHANGED_MODE must not.
 pub struct ComGuard(bool);
 

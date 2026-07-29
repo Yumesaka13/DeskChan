@@ -7,7 +7,7 @@ import path from 'node:path';
 export default defineConfig({
   plugins: [UnoCSS(), solid()],
   test: {
-    // Pure-logic tests only — vite-plugin-solid would otherwise default to
+    // Pure-logic tests only - vite-plugin-solid would otherwise default to
     // jsdom, which is not installed. Switch when component tests appear.
     environment: 'node',
   },

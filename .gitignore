@@ -18,8 +18,12 @@ Thumbs.db
 .env
 .env.*.local
 
-# Agent instructions — must never be committed (see AGENTS.md itself)
+# Agent instructions and worktrees must never be committed
 AGENTS.md
+.claude/
+
+# Localized PR drafting copy
+PR_DESCRIPTION.zh-CN.md
 
 # Tauri
 src-tauri/bindings/

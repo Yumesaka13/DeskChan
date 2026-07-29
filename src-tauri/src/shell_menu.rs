@@ -1,13 +1,13 @@
 //! Native Windows shell context menu for desktop icons.
 //!
 //! Right-clicking an icon shows the file's REAL Explorer menu (open, run as
-//! admin, pin, send to, properties, …) via IShellFolder::GetUIObjectOf →
+//! admin, pin, send to, properties, ...) via IShellFolder::GetUIObjectOf ->
 //! IContextMenu, using the same raw-FFI style as the icon extraction code.
 //! Multiple files are supported like Explorer's multi-selection, as long as
 //! they live in the same folder (child PIDLs must share one parent folder).
 //!
 //! DeskChan-specific entries (e.g. "remove from cell") are appended after a
-//! separator; the function returns which extra entry was picked, if any —
+//! separator; the function returns which extra entry was picked, if any -
 //! native verbs are invoked directly by the shell.
 
 #[cfg(target_os = "windows")]
@@ -23,7 +23,7 @@ pub fn show(
     }
     // Enforce the same-parent invariant here, not just at the call site: a
     // child PIDL handed to the WRONG parent folder would make shell verbs
-    // act on "parentA\nameB" — possibly a real, different file.
+    // act on "parentA\nameB" - possibly a real, different file.
     let parent = |p: &str| {
         std::path::Path::new(p)
             .parent()
@@ -54,8 +54,29 @@ pub fn show(
     rx.recv().map_err(|_| "menu closure dropped".to_string())?
 }
 
+/// Invoke Explorer's canonical `properties` verb without displaying a menu.
+#[cfg(target_os = "windows")]
+pub fn show_properties(window: tauri::WebviewWindow, paths: Vec<String>) -> Result<(), String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let hwnd = match window.window_handle().ok().map(|h| match h.as_raw() {
+        RawWindowHandle::Win32(w) => w.hwnd.get() as isize,
+        _ => 0isize,
+    }) {
+        Some(h) if h != 0 => h,
+        _ => return Err("no window handle".into()),
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    window
+        .run_on_main_thread(move || {
+            let _ = tx.send(unsafe { menu_ffi::invoke_properties(hwnd, &paths) });
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv()
+        .map_err(|_| "properties closure dropped".to_string())?
+}
+
 /// Forward a menu message to the active IContextMenu2/3 during the modal
-/// TrackPopupMenuEx loop — this is what populates dynamic submenus like
+/// TrackPopupMenuEx loop - this is what populates dynamic submenus like
 /// "Send To" / "Open With" and renders owner-drawn shell-extension items.
 /// Called from the window procedure; returns None when no menu is active.
 #[cfg(target_os = "windows")]
@@ -64,7 +85,7 @@ pub fn forward_menu_msg(msg: u32, wparam: usize, lparam: isize) -> Option<isize>
 }
 
 /// Show the native DESKTOP BACKGROUND context menu (view/sort/refresh,
-/// personalize, display settings, graphics-vendor panels …) at the cursor.
+/// personalize, display settings, graphics-vendor panels ...) at the cursor.
 #[cfg(target_os = "windows")]
 pub fn show_desktop(window: tauri::WebviewWindow) -> Result<(), String> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -77,15 +98,16 @@ pub fn show_desktop(window: tauri::WebviewWindow) -> Result<(), String> {
         _ => return Err("no window handle".into()),
     };
 
-    // Same main-thread hop as `show` — TrackPopupMenuEx needs the thread
-    // that owns the window, and recv() unblocks when the menu closes.
+    // TrackPopupMenuEx must run on the thread that owns the Tauri window.
     let (tx, rx) = std::sync::mpsc::channel();
     window
         .run_on_main_thread(move || {
             let _ = tx.send(unsafe { menu_ffi::show_background_menu(hwnd) });
         })
         .map_err(|e| e.to_string())?;
-    rx.recv().map_err(|_| "menu closure dropped".to_string())?.map(|_| ())
+    rx.recv()
+        .map_err(|_| "menu closure dropped".to_string())?
+        .map(|_| ())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -136,7 +158,6 @@ mod menu_ffi {
         d3: 0x11D0,
         d4: [0x8D, 0x10, 0x00, 0xA0, 0xC9, 0x0F, 0x27, 0x19],
     };
-
     const ID_FIRST: u32 = 1;
     const ID_LAST: u32 = 0x7FFE;
     const ID_EXTRA_BASE: u32 = 0x8000;
@@ -185,14 +206,21 @@ mod menu_ffi {
         fn CreatePopupMenu() -> isize;
         fn DestroyMenu(menu: isize) -> i32;
         fn AppendMenuW(menu: isize, flags: u32, id: usize, item: *const u16) -> i32;
-        fn TrackPopupMenuEx(menu: isize, flags: u32, x: i32, y: i32, hwnd: isize, tpm: *mut c_void) -> i32;
+        fn TrackPopupMenuEx(
+            menu: isize,
+            flags: u32,
+            x: i32,
+            y: i32,
+            hwnd: isize,
+            tpm: *mut c_void,
+        ) -> i32;
         fn GetCursorPos(p: *mut Point) -> i32;
         fn SetForegroundWindow(hwnd: isize) -> i32;
         fn PostMessageW(hwnd: isize, msg: u32, w: usize, l: isize) -> i32;
     }
 
-    // ── IContextMenu2/3 menu-message forwarding ─────────────────────────
-    // The shell populates dynamic submenus ("Send To", "Open With", …) and
+    // -- IContextMenu2/3 menu-message forwarding -------------------------
+    // The shell populates dynamic submenus ("Send To", "Open With", ...) and
     // draws owner-drawn items only when the menu owner's wndproc forwards
     // WM_INITMENUPOPUP / WM_MEASUREITEM / WM_DRAWITEM / WM_MENUCHAR to
     // IContextMenu2::HandleMenuMsg (slot 6) / IContextMenu3::HandleMenuMsg2
@@ -208,7 +236,10 @@ mod menu_ffi {
     const WM_MENUCHAR: u32 = 0x0120;
 
     pub fn forward_menu_msg(msg: u32, wparam: usize, lparam: isize) -> Option<isize> {
-        if !matches!(msg, WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR) {
+        if !matches!(
+            msg,
+            WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR
+        ) {
             return None;
         }
         let ptr = ACTIVE_MENU_PTR.load(Ordering::Acquire) as *mut c_void;
@@ -252,7 +283,9 @@ mod menu_ffi {
                 if qi(context_menu.0, iid, &mut ptr) == 0 && !ptr.is_null() {
                     ACTIVE_MENU_PTR.store(ptr as isize, Ordering::Release);
                     ACTIVE_MENU_VER.store(ver, Ordering::Release);
-                    return Some(Self { _iface: ComPtr(ptr) });
+                    return Some(Self {
+                        _iface: ComPtr(ptr),
+                    });
                 }
             }
             None
@@ -283,7 +316,7 @@ mod menu_ffi {
             }
         }
 
-        // Each path → absolute PIDL → (parent IShellFolder, child PIDL).
+        // Each path -> absolute PIDL -> (parent IShellFolder, child PIDL).
         // All files share one folder, so the first parent serves them all;
         // the other parents are released immediately. Child PIDLs point into
         // their absolute PIDL, which `pidls` keeps alive past the menu loop.
@@ -293,7 +326,13 @@ mod menu_ffi {
         for path in paths {
             let wide_path = wide(path);
             let mut pidl: *mut c_void = std::ptr::null_mut();
-            if SHParseDisplayName(wide_path.as_ptr(), std::ptr::null_mut(), &mut pidl, 0, std::ptr::null_mut()) != 0
+            if SHParseDisplayName(
+                wide_path.as_ptr(),
+                std::ptr::null_mut(),
+                &mut pidl,
+                0,
+                std::ptr::null_mut(),
+            ) != 0
                 || pidl.is_null()
             {
                 return Err("SHParseDisplayName failed".into());
@@ -344,13 +383,105 @@ mod menu_ffi {
         track_menu(hwnd, &context_menu, extra_items)
     }
 
-    /// Show the DESKTOP BACKGROUND shell menu (view/sort/refresh, wallpaper
-    /// tools, graphics-vendor panels, personalize, display settings — exactly
-    /// what right-clicking the real desktop offers). The desktop folder's
-    /// view object provides this menu.
+    /// Build the real shell menu object, then execute its named verb. Querying
+    /// the object rather than using rundll32 makes this work for files and
+    /// folders even when their default open handler overrides ShellExecute.
+    pub unsafe fn invoke_properties(hwnd: isize, paths: &[String]) -> Result<(), String> {
+        if paths.is_empty() {
+            return Err("no paths".into());
+        }
+        let _com = ComGuard::init();
+        struct PidlFree(*mut c_void);
+        impl Drop for PidlFree {
+            fn drop(&mut self) {
+                unsafe { CoTaskMemFree(self.0) };
+            }
+        }
+        let mut pidls = Vec::with_capacity(paths.len());
+        let mut children = Vec::with_capacity(paths.len());
+        let mut folder: Option<ComPtr> = None;
+        for path in paths {
+            let name = wide(path);
+            let mut pidl = std::ptr::null_mut();
+            if SHParseDisplayName(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut pidl,
+                0,
+                std::ptr::null_mut(),
+            ) != 0
+                || pidl.is_null()
+            {
+                return Err("SHParseDisplayName failed".into());
+            }
+            pidls.push(PidlFree(pidl));
+            let mut parent = std::ptr::null_mut();
+            let mut child: *const c_void = std::ptr::null();
+            if SHBindToParent(pidl, &IID_ISHELL_FOLDER, &mut parent, &mut child) != 0
+                || parent.is_null()
+                || child.is_null()
+            {
+                return Err("SHBindToParent failed".into());
+            }
+            let parent = ComPtr(parent);
+            if folder.is_none() {
+                folder = Some(parent);
+            }
+            children.push(child);
+        }
+        let folder = folder.ok_or("no folder")?;
+        type GetUIObjectOfFn = unsafe extern "system" fn(
+            *mut c_void,
+            isize,
+            u32,
+            *const *const c_void,
+            *const Guid,
+            *mut u32,
+            *mut *mut c_void,
+        ) -> i32;
+        let get_ui_object: GetUIObjectOfFn = std::mem::transmute(*folder.vtbl().add(10));
+        let mut menu = std::ptr::null_mut();
+        if get_ui_object(
+            folder.0,
+            hwnd,
+            children.len() as u32,
+            children.as_ptr(),
+            &IID_ICONTEXT_MENU,
+            std::ptr::null_mut(),
+            &mut menu,
+        ) != 0
+            || menu.is_null()
+        {
+            return Err("GetUIObjectOf(IContextMenu) failed".into());
+        }
+        let menu = ComPtr(menu);
+        type InvokeCommandFn =
+            unsafe extern "system" fn(*mut c_void, *const CmInvokeCommandInfo) -> i32;
+        let invoke: InvokeCommandFn = std::mem::transmute(*menu.vtbl().add(4));
+        let verb = b"properties\0";
+        let info = CmInvokeCommandInfo {
+            cbSize: std::mem::size_of::<CmInvokeCommandInfo>() as u32,
+            fMask: 0,
+            hwnd,
+            lpVerb: verb.as_ptr(),
+            lpParameters: std::ptr::null(),
+            lpDirectory: std::ptr::null(),
+            nShow: SW_SHOWNORMAL,
+            dwHotKey: 0,
+            hIcon: 0,
+        };
+        if invoke(menu.0, &info) < 0 {
+            return Err("properties verb failed".into());
+        }
+        Ok(())
+    }
+
+    /// Show the stable desktop-folder background menu owned by DeskChan.
+    /// This avoids depending on Explorer's hidden desktop view and foreground
+    /// window state, at the cost of omitting some view-specific commands.
     pub unsafe fn show_background_menu(hwnd: isize) -> Result<Option<u32>, String> {
         extern "system" {
-            fn SHGetDesktopFolder(ppshf: *mut *mut c_void) -> i32;
+            fn SHGetDesktopFolder(folder: *mut *mut c_void) -> i32;
         }
 
         let _com = ComGuard::init();
@@ -360,7 +491,6 @@ mod menu_ffi {
         }
         let folder = ComPtr(folder_ptr);
 
-        // IShellFolder vtable slot 8: CreateViewObject
         type CreateViewObjectFn =
             unsafe extern "system" fn(*mut c_void, isize, *const Guid, *mut *mut c_void) -> i32;
         let create_view_object: CreateViewObjectFn = std::mem::transmute(*folder.vtbl().add(8));
@@ -407,11 +537,16 @@ mod menu_ffi {
             AppendMenuW(hmenu, MF_SEPARATOR, 0, std::ptr::null());
             for (i, label) in extra_items.iter().enumerate() {
                 let text = wide(label);
-                AppendMenuW(hmenu, MF_STRING, (ID_EXTRA_BASE + i as u32) as usize, text.as_ptr());
+                AppendMenuW(
+                    hmenu,
+                    MF_STRING,
+                    (ID_EXTRA_BASE + i as u32) as usize,
+                    text.as_ptr(),
+                );
             }
         }
 
-        // Forward menu messages to IContextMenu2/3 while the menu is open —
+        // Forward menu messages to IContextMenu2/3 while the menu is open -
         // without this, "Send To" / "Open With" submenus stay empty.
         let _forwarder = MenuMsgForwarder::install(context_menu);
 
@@ -433,7 +568,7 @@ mod menu_ffi {
         if cmd == 0 {
             return Ok(None); // dismissed
         }
-        // Only ids we actually appended count as extras — buggy shell
+        // Only ids we actually appended count as extras - buggy shell
         // extensions have been seen straying beyond idCmdLast. Out-of-range
         // ids can't be dispatched by the composite IContextMenu either, so
         // don't hand them to InvokeCommand.
@@ -442,7 +577,7 @@ mod menu_ffi {
             return Ok(((idx as usize) < extra_items.len()).then_some(idx));
         }
 
-        // Native verb picked — let the shell execute it.
+        // Native verb picked - let the shell execute it.
         // IContextMenu vtable slot 4: InvokeCommand
         type InvokeCommandFn =
             unsafe extern "system" fn(*mut c_void, *const CmInvokeCommandInfo) -> i32;

@@ -1,21 +1,21 @@
 //! DeskChan window manager.
 //!
 //! The overlay is "glued to the desktop" via a Z-order invariant: our window
-//! must sit IMMEDIATELY above the SHELLDLL_DefView host (Progman/WorkerW) —
+//! must sit IMMEDIATELY above the SHELLDLL_DefView host (Progman/WorkerW) -
 //! below every application window, above the wallpaper. The polling thread
 //! (33ms) re-asserts this. This also survives Win+D: when the desktop is
 //! raised, we simply follow it up; when apps return, they sit above us.
 //!
 //! Additional mechanisms ensure the window survives Win+D (Show Desktop):
-//! 1. AppBar registration — SHAppBarMessage(ABM_NEW/QUERYPOS/SETPOS) grants
+//! 1. AppBar registration - SHAppBarMessage(ABM_NEW/QUERYPOS/SETPOS) grants
 //!    system-level immunity from Win+D's window enumeration (same as taskbar).
-//! 2. WndProc replacement — intercepts WM_SHOWWINDOW, SC_MINIMIZE,
+//! 2. WndProc replacement - intercepts WM_SHOWWINDOW, SC_MINIMIZE,
 //!    WM_WINDOWPOSCHANGING, and WM_SIZE to block hide/minimize/coordinate
 //!    exile, and answers WM_NCHITTEST with HTCLIENT so the overlay can never
 //!    be user-dragged or user-resized.
 //!
 //! Desktop icon management: hides the native SysListView32 on startup,
-//! shows it on quit. Files never leave the desktop — we just hide the icons
+//! shows it on quit. Files never leave the desktop - we just hide the icons
 //! and render our own overlay.
 
 use std::sync::{
@@ -24,12 +24,15 @@ use std::sync::{
 };
 use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
-// ── Shared state ───────────────────────────────────────────────────────────
+// -- Shared state -----------------------------------------------------------
 
 pub struct DeskState {
     pub running: AtomicBool,
-    /// Set by JS when pointer-event drag is active — prevents any window state changes.
+    /// Set by JS when pointer-event drag is active - prevents any window state changes.
     pub dragging: AtomicBool,
+    /// Set while Explorer owns the full desktop context menu. Reordering the
+    /// overlay during that modal loop dismisses the shell popup immediately.
+    pub native_desktop_menu_open: AtomicBool,
 }
 
 impl DeskState {
@@ -37,11 +40,12 @@ impl DeskState {
         Self {
             running: AtomicBool::new(true),
             dragging: AtomicBool::new(false),
+            native_desktop_menu_open: AtomicBool::new(false),
         }
     }
 }
 
-// ── Win32 constants ────────────────────────────────────────────────────────
+// -- Win32 constants --------------------------------------------------------
 #[cfg(target_os = "windows")]
 mod constants {
     // Extended window styles
@@ -97,14 +101,11 @@ mod constants {
     pub const ABM_SETPOS: u32 = 3;
     pub const ABE_TOP: u32 = 1;
 
-    // System
-    pub const SPI_GETWORKAREA: u32 = 48;
-
     // Coordinate exile threshold (Win+D sends windows to -32000)
     pub const COORDINATE_EXILE_THRESHOLD: i32 = -10000;
 }
 
-// ── Init: AppBar + styles + WndProc replacement ────────────────────────────
+// -- Init: AppBar + styles + WndProc replacement ----------------------------
 
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
@@ -122,7 +123,7 @@ pub fn init(window: &WebviewWindow) {
         None => return,
     };
 
-    // FFI declarations (unique to init — shared ones live in crate::win32)
+    // FFI declarations (unique to init - shared ones live in crate::win32)
     extern "system" {
         fn GetWindowLongPtrW(h: isize, i: i32) -> isize;
         fn SetWindowLongPtrW(h: isize, i: i32, v: isize) -> isize;
@@ -148,39 +149,55 @@ pub fn init(window: &WebviewWindow) {
     }
 
     unsafe {
-        // ── Window styles ────────────────────────────────────────────
-        // Tool window (no taskbar entry) + no activation (no focus stealing)
+        // -- Window styles --------------------------------------------
+        // Tool window (no taskbar entry). The desktop must be allowed to
+        // activate when clicked so WebView2 can receive Ctrl+V and other
+        // desktop keyboard shortcuts.
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-        SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        SetWindowLongW(
+            hwnd,
+            GWL_EXSTYLE,
+            (ex_style | WS_EX_TOOLWINDOW) & !WS_EX_NOACTIVATE,
+        );
 
         // Strip every frame style (see strip_frame_styles for the WS_POPUP
         // rationale and the phantom-title-bar / draggable-left-edge history).
         //
         // NOTE: tauri.conf.json must keep `"shadow": false`. With the default
         // shadow enabled, tao implements undecorated shadows by KEEPING
-        // WS_CAPTION and hiding it in WM_NCCALCSIZE — stripping the style
+        // WS_CAPTION and hiding it in WM_NCCALCSIZE - stripping the style
         // here then desyncs that compensation, which showed up as a phantom
         // title-bar band at the top and an outer size larger than requested.
         strip_frame_styles(hwnd);
 
-        // ── AppBar registration ──────────────────────────────────────
+        // -- AppBar registration --------------------------------------
         // Register as Application Desktop Toolbar. Windows taskbar uses
         // the same mechanism. Win+D unconditionally exempts AppBars.
-        // Must call NEW → QUERYPOS → SETPOS for valid registration.
+        // Must call NEW -> QUERYPOS -> SETPOS for valid registration.
         let mut abd = AppBarData {
             cbSize: std::mem::size_of::<AppBarData>() as u32,
             hWnd: hwnd,
-            uCallbackMessage: 0x0401, // WM_USER + 1 — must be non-zero
+            uCallbackMessage: 0x0401, // WM_USER + 1 - must be non-zero
             uEdge: ABE_TOP,
-            rc: Rect { left: 0, top: 0, right: 0, bottom: 0 },
+            rc: Rect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
             lParam: 0,
         };
         SHAppBarMessage(ABM_NEW, &mut abd);
-        abd.rc = Rect { left: 0, top: 0, right: 1920, bottom: 0 };
+        abd.rc = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 0,
+        };
         SHAppBarMessage(ABM_QUERYPOS, &mut abd);
         SHAppBarMessage(ABM_SETPOS, &mut abd);
 
-        // ── WndProc replacement ──────────────────────────────────────
+        // -- WndProc replacement --------------------------------------
         // Replace window procedure to intercept hide/minimize messages.
         // Uses CallWindowProcW for safe chaining (no transmute needed).
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
@@ -188,16 +205,16 @@ pub fn init(window: &WebviewWindow) {
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as *const () as isize);
     }
 
-    // Start interactive — cursor polling will toggle click-through later
+    // Start interactive - cursor polling will toggle click-through later
     let _ = window.set_ignore_cursor_events(false);
 
-    // Drop to the desktop layer right away — a freshly created window sits
+    // Drop to the desktop layer right away - a freshly created window sits
     // on top of every app opened before us and, being NOACTIVATE, would
     // never be lowered by clicks. The polling loop retries if the shell
     // isn't ready yet.
     if let Some((host, lv)) = desktop_anchor() {
         pin_above_desktop(hwnd, host);
-        // Hide native desktop icons — our overlay replaces them entirely
+        // Hide native desktop icons - our overlay replaces them entirely
         if let Some(lv) = lv {
             const SW_HIDE: i32 = 0;
             unsafe { crate::win32::ShowWindow(lv, SW_HIDE) };
@@ -205,22 +222,22 @@ pub fn init(window: &WebviewWindow) {
     }
 }
 
-/// Show the desktop's SysListView32 — restore native desktop icons.
+/// Show the desktop's SysListView32 - restore native desktop icons.
 #[cfg(target_os = "windows")]
 pub fn show_desktop_icons() {
-    if let Some(list_view) = find_desktop_listview() {
+    if let Some(list_view) = desktop_list_view() {
         const SW_SHOW: i32 = 5;
         unsafe { crate::win32::ShowWindow(list_view, SW_SHOW) };
     }
 }
 
 /// Find the desktop shell windows as (host, listview):
-/// - host: the top-level Progman or WorkerW that contains SHELLDLL_DefView —
+/// - host: the top-level Progman or WorkerW that contains SHELLDLL_DefView -
 ///   the Z-order anchor the overlay is pinned above
 /// - listview: the SysListView32 inside it that renders desktop icons
 ///
-/// Searches both Progman → SHELLDLL_DefView → SysListView32 (classic)
-/// and WorkerW → SHELLDLL_DefView → SysListView32 (modern Windows 10/11).
+/// Searches both Progman -> SHELLDLL_DefView -> SysListView32 (classic)
+/// and WorkerW -> SHELLDLL_DefView -> SysListView32 (modern Windows 10/11).
 #[cfg(target_os = "windows")]
 fn find_desktop_windows() -> Option<(isize, isize)> {
     use crate::win32::{wide, FindWindowExW, FindWindowW};
@@ -240,7 +257,7 @@ fn find_desktop_windows() -> Option<(isize, isize)> {
                 }
             }
             // Some Win11 builds nest DefView one level deeper:
-            // Progman → WorkerW → SHELLDLL_DefView → SysListView32
+            // Progman -> WorkerW -> SHELLDLL_DefView -> SysListView32
             let workerw_cls = wide("WorkerW");
             let mut ww = FindWindowExW(progman, 0, workerw_cls.as_ptr(), std::ptr::null());
             while ww != 0 {
@@ -274,15 +291,15 @@ fn find_desktop_windows() -> Option<(isize, isize)> {
 }
 
 #[cfg(target_os = "windows")]
-fn find_desktop_listview() -> Option<isize> {
+pub fn desktop_list_view() -> Option<isize> {
     find_desktop_windows().map(|(_, lv)| lv)
 }
 
 /// Resolve the Z-order anchor for this tick, with a degraded fallback.
 ///
 /// Bug fix ("sometimes starts behind the desktop and Win+D knocks it away"):
-/// when SHELLDLL_DefView is not findable yet — shell still starting, or an
-/// Explorer restart recreating its window tree — the old code skipped
+/// when SHELLDLL_DefView is not findable yet - shell still starting, or an
+/// Explorer restart recreating its window tree - the old code skipped
 /// pinning entirely, leaving the overlay wherever window creation put it,
 /// often BELOW the desktop and outside the Win+D-defense invariant. Falling
 /// back to the bare Progman window (which always exists) keeps the overlay
@@ -299,12 +316,12 @@ fn desktop_anchor() -> Option<(isize, Option<isize>)> {
 }
 
 /// Enforce the desktop-glue invariant: our window sits IMMEDIATELY above the
-/// anchor (DefView host) in the Z-order — below every app window, above the
+/// anchor (DefView host) in the Z-order - below every app window, above the
 /// wallpaper and icons. Idempotent and cheap (read-only when already in
 /// place), so it is safe to call every polling tick.
 ///
 /// Bug fix: without this, the overlay stayed wherever window creation put it
-/// (on top of every app started earlier) — WS_EX_NOACTIVATE means clicks
+/// (on top of every app started earlier) - WS_EX_NOACTIVATE means clicks
 /// never re-order it, so it "sometimes covered other applications".
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
@@ -318,7 +335,7 @@ fn pin_above_desktop(our_hwnd: isize, host: isize) {
             return; // already glued
         }
         // Inserting after a TOPMOST window would catapult us into the
-        // topmost band (covering every app — the very bug we're fixing).
+        // topmost band (covering every app - the very bug we're fixing).
         // Happens right after Win+D, when the desktop sits directly under
         // the topmost band. HWND_TOP only tops the non-topmost band.
         let insert_after = if prev == 0 || GetWindowLongW(prev, GWL_EXSTYLE) & WS_EX_TOPMOST != 0 {
@@ -326,23 +343,25 @@ fn pin_above_desktop(our_hwnd: isize, host: isize) {
         } else {
             prev
         };
-        SetWindowPos(our_hwnd, insert_after, 0, 0, 0, 0, SWP_NOSIZE_NOMOVE_NOACTIVATE);
+        SetWindowPos(
+            our_hwnd,
+            insert_after,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOSIZE_NOMOVE_NOACTIVATE,
+        );
     }
 }
 
 #[cfg(target_os = "windows")]
-static ORIGINAL_WNDPROC: std::sync::atomic::AtomicIsize =
-    std::sync::atomic::AtomicIsize::new(0);
+static ORIGINAL_WNDPROC: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
 /// Custom window procedure. Blocks all attempts to hide, minimize, or
 /// coordinate-exile the window (Win+D's three attack vectors).
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn wndproc(
-    hwnd: isize,
-    msg: u32,
-    wparam: usize,
-    lparam: isize,
-) -> isize {
+unsafe extern "system" fn wndproc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
     use constants::*;
 
     // While a native shell context menu is open, hand its messages to
@@ -358,18 +377,18 @@ unsafe extern "system" fn wndproc(
         // Block minimize via system menu
         WM_SYSCOMMAND if (wparam & 0xFFF0) == SC_MINIMIZE => return 0,
 
-        // Everything is client area — no resize borders, no drag regions.
+        // Everything is client area - no resize borders, no drag regions.
         // The overlay must never be user-movable or user-resizable.
         WM_NCHITTEST => return HTCLIENT,
 
         // Suppress ALL non-client painting. Without this, activating the
         // window (clicking it focuses the WebView2 child) lets the default
-        // handlers repaint a frame — the "title bar comes back after a
+        // handlers repaint a frame - the "title bar comes back after a
         // click" bug. Standard borderless-window practice.
         WM_NCPAINT => return 0,
         WM_NCACTIVATE => return 1,
 
-        // Block SIZE_MINIMIZED → prevents WebView2 from stopping render
+        // Block SIZE_MINIMIZED -> prevents WebView2 from stopping render
         WM_SIZE if wparam == SIZE_MINIMIZED => return 0,
 
         // Intercept window position changes
@@ -386,7 +405,7 @@ unsafe extern "system" fn wndproc(
             }
             let wp = &mut *(lparam as *mut WindowPos);
 
-            // Strip SWP_HIDEWINDOW — prevent hiding
+            // Strip SWP_HIDEWINDOW - prevent hiding
             wp.flags &= !SWP_HIDEWINDOW;
 
             // Block coordinate exile: Win+D sends windows to (-32000, -32000)
@@ -400,13 +419,18 @@ unsafe extern "system" fn wndproc(
     extern "system" {
         fn CallWindowProcW(p: isize, h: isize, m: u32, w: usize, l: isize) -> isize;
     }
-    CallWindowProcW(ORIGINAL_WNDPROC.load(Ordering::Relaxed), hwnd, msg, wparam, lparam)
+    CallWindowProcW(
+        ORIGINAL_WNDPROC.load(Ordering::Relaxed),
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+    )
 }
 
-// ── Window sizing ──────────────────────────────────────────────────────────
+// -- Window sizing ----------------------------------------------------------
 
-/// Position and size the window to cover the primary monitor's work area
-/// (desktop area excluding taskbar).
+/// Position and size the window to cover the complete virtual desktop.
 pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -415,7 +439,7 @@ pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
 
     // On Windows, set the OUTER rect directly. Tauri's set_size sets the
     // inner size and lets tao pad it via AdjustWindowRectEx with its cached
-    // styles — that padding made the overlay overhang the work area.
+    // styles - that padding made the overlay overhang the work area.
     #[cfg(target_os = "windows")]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -441,42 +465,30 @@ pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
     let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
 }
 
-/// Returns the primary monitor's work area as (x, y, width, height) in physical pixels.
+/// Returns the virtual desktop as (x, y, width, height) in physical pixels.
 #[allow(non_snake_case)]
 fn get_work_area<R: Runtime>(_app: &tauri::AppHandle<R>) -> (f64, f64, f64, f64) {
     #[cfg(target_os = "windows")]
     {
-        use constants::SPI_GETWORKAREA;
-        #[repr(C)]
-        struct WinRect {
-            left: i32,
-            top: i32,
-            right: i32,
-            bottom: i32,
-        }
         extern "system" {
-            fn SystemParametersInfoW(
-                action: u32,
-                param: u32,
-                pv: *mut std::ffi::c_void,
-                ini: u32,
-            ) -> i32;
+            fn GetSystemMetrics(index: i32) -> i32;
         }
-        let mut rect = WinRect { left: 0, top: 0, right: 0, bottom: 0 };
-        if unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut rect as *mut _ as _, 0) } != 0
-        {
-            return (
-                rect.left as f64,
-                rect.top as f64,
-                (rect.right - rect.left) as f64,
-                (rect.bottom - rect.top) as f64,
-            );
+        const SM_XVIRTUALSCREEN: i32 = 76;
+        const SM_YVIRTUALSCREEN: i32 = 77;
+        const SM_CXVIRTUALSCREEN: i32 = 78;
+        const SM_CYVIRTUALSCREEN: i32 = 79;
+        let x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+        let y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+        let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+        let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+        if width > 0 && height > 0 {
+            return (x as f64, y as f64, width as f64, height as f64);
         }
     }
     (0.0, 0.0, 1920.0, 1080.0) // fallback
 }
 
-// ── Background threads ─────────────────────────────────────────────────────
+// -- Background threads -----------------------------------------------------
 
 /// Start both the cursor-polling thread (click-through toggle) and the
 /// Z-order counter-attack (Win+D resistance).
@@ -490,18 +502,19 @@ pub fn start_background_threads(app: tauri::AppHandle, state: Arc<DeskState>) {
 fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let poll_interval = std::time::Duration::from_millis(33); // ~30 fps
+    let mut virtual_bounds = None;
 
     while state.running.load(Ordering::Relaxed) {
         std::thread::sleep(poll_interval);
 
         // Re-check after the sleep: quit_app clears the flag and restores
-        // the native icons — a tick that was already sleeping must not wake
+        // the native icons - a tick that was already sleeping must not wake
         // up and re-hide them during teardown.
         if !state.running.load(Ordering::Relaxed) {
             break;
         }
 
-        // Skip while a pointer drag is active — re-ordering our own window
+        // Skip while a pointer drag is active - re-ordering our own window
         // mid-drag could disturb WebView2's pointer capture.
         if state.dragging.load(Ordering::Relaxed) {
             continue;
@@ -518,20 +531,43 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
             continue;
         }
 
-        // Re-assert the desktop-glue invariant. This subsumes the old
-        // Win+D "counter-attack": when Win+D raises the desktop above us,
-        // we follow it up; apps the user re-activates go above us again.
-        // The anchor is re-resolved every tick because Explorer moves
-        // SHELLDLL_DefView between Progman and WorkerW at runtime.
-        if let Some((host, lv)) = desktop_anchor() {
-            pin_above_desktop(our_hwnd, host);
+        // Monitor connections, resolutions, and arrangements can change at
+        // runtime. Keep the one desktop overlay aligned with the complete
+        // virtual screen, including displays positioned left/above primary.
+        let bounds = get_work_area(&app);
+        if virtual_bounds != Some(bounds) {
+            unsafe {
+                crate::win32::SetWindowPos(
+                    our_hwnd,
+                    0,
+                    bounds.0 as i32,
+                    bounds.1 as i32,
+                    bounds.2 as i32,
+                    bounds.3 as i32,
+                    constants::SWP_NOZORDER | constants::SWP_NOACTIVATE,
+                );
+            }
+            virtual_bounds = Some(bounds);
+        }
 
-            // Re-hide the native icon list if it reappeared — Explorer
-            // recreates/reshows it on restart, F5, or display changes.
-            if let Some(lv) = lv {
-                if unsafe { crate::win32::IsWindowVisible(lv) } != 0 {
-                    const SW_HIDE: i32 = 0;
-                    unsafe { crate::win32::ShowWindow(lv, SW_HIDE) };
+        // Explorer owns the complete desktop context menu. Do not change its
+        // Z-order or hide its list view while that menu's modal loop runs.
+        if !state.native_desktop_menu_open.load(Ordering::Relaxed) {
+            // Re-assert the desktop-glue invariant. This subsumes the old
+            // Win+D "counter-attack": when Win+D raises the desktop above us,
+            // we follow it up; apps the user re-activates go above us again.
+            // The anchor is re-resolved every tick because Explorer moves
+            // SHELLDLL_DefView between Progman and WorkerW at runtime.
+            if let Some((host, lv)) = desktop_anchor() {
+                pin_above_desktop(our_hwnd, host);
+
+                // Re-hide the native icon list if it reappeared - Explorer
+                // recreates/reshows it on restart, F5, or display changes.
+                if let Some(lv) = lv {
+                    if unsafe { crate::win32::IsWindowVisible(lv) } != 0 {
+                        const SW_HIDE: i32 = 0;
+                        unsafe { crate::win32::ShowWindow(lv, SW_HIDE) };
+                    }
                 }
             }
         }
@@ -547,7 +583,7 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
 /// History: undecorated-but-resizable still carried WS_THICKFRAME (visible
 /// draggable left edge at startup); a later re-appearing caption came from
 /// default non-client processing. Plain WS_POPUP without caption/sysmenu has
-/// no non-client machinery at all, so nothing can ever draw a frame —
+/// no non-client machinery at all, so nothing can ever draw a frame -
 /// regardless of who processes WM_NCACTIVATE / WM_NCPAINT down the line.
 /// SWP_FRAMECHANGED is required for style changes to take effect.
 #[cfg(target_os = "windows")]
@@ -556,9 +592,13 @@ fn strip_frame_styles(hwnd: isize) {
     use constants::*;
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_STYLE);
-        let clean =
-            (style & !WS_CAPTION & !WS_THICKFRAME & !WS_SYSMENU & !WS_MINIMIZEBOX & !WS_MAXIMIZEBOX)
-                | WS_POPUP;
+        let clean = (style
+            & !WS_CAPTION
+            & !WS_THICKFRAME
+            & !WS_SYSMENU
+            & !WS_MINIMIZEBOX
+            & !WS_MAXIMIZEBOX)
+            | WS_POPUP;
         if style != clean {
             SetWindowLongW(hwnd, GWL_STYLE, clean);
             SetWindowPos(
@@ -578,15 +618,15 @@ fn strip_frame_styles(hwnd: isize) {
 #[cfg(not(target_os = "windows"))]
 fn polling_loop(_app: tauri::AppHandle, _state: Arc<DeskState>) {}
 
-// ── File icon extraction ──────────────────────────────────────────────────
+// -- File icon extraction --------------------------------------------------
 
 /// Extract the file's shell icon and return it as a base64 PNG data URL.
 ///
-/// Resolves the system image-list index via SHGFI_SYSICONINDEX — this yields
+/// Resolves the system image-list index via SHGFI_SYSICONINDEX - this yields
 /// the file's REAL icon. (The previous SHGFI_USEFILEATTRIBUTES approach never
-/// touched the file, so every .exe got the same generic icon — a major cause
+/// touched the file, so every .exe got the same generic icon - a major cause
 /// of the "doesn't look native" complaint.) Then pulls the largest available
-/// bitmap: SHIL_JUMBO (256) → SHIL_EXTRALARGE (48) → legacy 32px fallback.
+/// bitmap: SHIL_JUMBO (256) -> SHIL_EXTRALARGE (48) -> legacy 32px fallback.
 /// The frontend downscales to 48px CSS, staying crisp at any DPI.
 #[cfg(target_os = "windows")]
 pub fn get_file_icon_base64(path: &str) -> Result<String, String> {
@@ -601,7 +641,7 @@ pub fn get_file_icon_base64(path: &str) -> Result<String, String> {
 
     // Icons render at 48px CSS (96 physical at 2x DPI). Encoding the raw
     // 256px jumbo bitmap cost ~7x more PNG time + base64 payload for zero
-    // visible gain — downscale first. (The corner-stamp check above needed
+    // visible gain - downscale first. (The corner-stamp check above needed
     // the full canvas, so this must happen after extraction.)
     //
     // resize() filters channels independently and documents a premultiplied-
@@ -697,23 +737,46 @@ mod icon_ffi {
     const SHGFI_SYSICONINDEX: u32 = 0x4000;
     const SHGFI_USEFILEATTRIBUTES: u32 = 0x10;
     const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
-    const SHIL_EXTRALARGE: i32 = 2; // 48×48
-    const SHIL_JUMBO: i32 = 4; // 256×256
+    const SHIL_EXTRALARGE: i32 = 2; // 48x48
+    const SHIL_JUMBO: i32 = 4; // 256x256
     const ILD_TRANSPARENT: u32 = 0x1;
     const DIB_RGB_COLORS: u32 = 0;
     const BI_RGB: u32 = 0;
     const DI_NORMAL: u32 = 3;
 
     extern "system" {
-        fn SHGetFileInfoW(path: *const u16, attr: u32, info: *mut ShFileInfo, cb: u32, flags: u32) -> usize;
+        fn SHGetFileInfoW(
+            path: *const u16,
+            attr: u32,
+            info: *mut ShFileInfo,
+            cb: u32,
+            flags: u32,
+        ) -> usize;
         fn SHGetImageList(iImageList: i32, riid: *const Guid, ppv: *mut *mut c_void) -> i32;
         fn CreateCompatibleDC(h: isize) -> isize;
-        fn CreateDIBSection(hdc: isize, pbmi: *const BitmapInfo, usage: u32, ppvBits: *mut *mut c_void, hSection: isize, offset: u32) -> isize;
+        fn CreateDIBSection(
+            hdc: isize,
+            pbmi: *const BitmapInfo,
+            usage: u32,
+            ppvBits: *mut *mut c_void,
+            hSection: isize,
+            offset: u32,
+        ) -> isize;
         fn SelectObject(h: isize, o: isize) -> isize;
         fn DeleteDC(h: isize) -> i32;
         fn DeleteObject(o: isize) -> i32;
         fn DestroyIcon(i: isize) -> i32;
-        fn DrawIconEx(dc: isize, x: i32, y: i32, hi: isize, cx: i32, cy: i32, step: u32, brush: isize, flags: u32) -> i32;
+        fn DrawIconEx(
+            dc: isize,
+            x: i32,
+            y: i32,
+            hi: isize,
+            cx: i32,
+            cy: i32,
+            step: u32,
+            brush: isize,
+            flags: u32,
+        ) -> i32;
     }
 
     /// Get an HICON of the given shell image-list size (SHIL_*) for a
@@ -721,7 +784,7 @@ mod icon_ffi {
     fn imagelist_icon(which: i32, index: i32) -> Option<isize> {
         // IImageList vtable: 0-2 IUnknown (QI/AddRef/Release), 3 Add,
         // 4 ReplaceIcon, 5 SetOverlayImage, 6 Replace, 7 AddMasked,
-        // 8 Draw, 9 Remove, 10 GetIcon — stable public ABI since Vista.
+        // 8 Draw, 9 Remove, 10 GetIcon - stable public ABI since Vista.
         type GetIconFn = unsafe extern "system" fn(*mut c_void, i32, u32, *mut isize) -> i32;
         type ReleaseFn = unsafe extern "system" fn(*mut c_void) -> u32;
         unsafe {
@@ -739,7 +802,7 @@ mod icon_ffi {
         }
     }
 
-    /// Render an HICON into an RGBA buffer of `size`×`size` via a top-down
+    /// Render an HICON into an RGBA buffer of `size`x`size` via a top-down
     /// 32-bit DIB section (reliable pixel access). Consumes the icon.
     fn render_icon_rgba(hicon: isize, size: i32) -> Result<Vec<u8>, String> {
         struct Cleanup {
@@ -766,7 +829,12 @@ mod icon_ffi {
         }
 
         let hdc = unsafe { CreateCompatibleDC(0) };
-        let mut cleanup = Cleanup { hdc, hbitmap: 0, old_obj: 0, hicon };
+        let mut cleanup = Cleanup {
+            hdc,
+            hbitmap: 0,
+            old_obj: 0,
+            hicon,
+        };
         if hdc == 0 {
             return Err("CreateCompatibleDC failed".into());
         }
@@ -806,11 +874,11 @@ mod icon_ffi {
         }
         drop(cleanup);
 
-        // BGRA → RGBA
+        // BGRA -> RGBA
         for chunk in pixels.chunks_exact_mut(4) {
             chunk.swap(0, 2);
         }
-        // Legacy mask-based icons have no alpha channel at all → whole image
+        // Legacy mask-based icons have no alpha channel at all -> whole image
         // is transparent. Only then force non-black pixels opaque (a per-pixel
         // fix would corrupt antialiased edges of modern icons).
         if pixels.chunks_exact(4).all(|c| c[3] == 0) {
@@ -843,7 +911,7 @@ mod icon_ffi {
     }
 
     /// Shell thumbnail (images/videos/anything with a thumbnail provider) as
-    /// (rgba_pixels, size). None when the file type has no thumbnail — the
+    /// (rgba_pixels, size). None when the file type has no thumbnail - the
     /// caller falls back to the icon pipeline. SIIGBF_THUMBNAILONLY makes
     /// icon-only files fail instead of returning a blurry scaled icon.
     pub fn extract_thumbnail_rgba(path: &str, size: i32) -> Option<(Vec<u8>, u32)> {
@@ -925,13 +993,17 @@ mod icon_ffi {
             let _hbm_free = BitmapFree(hbm);
 
             let mut bm = std::mem::zeroed::<Bitmap>();
-            if GetObjectW(hbm, std::mem::size_of::<Bitmap>() as i32, &mut bm as *mut _ as _) == 0
+            if GetObjectW(
+                hbm,
+                std::mem::size_of::<Bitmap>() as i32,
+                &mut bm as *mut _ as _,
+            ) == 0
                 || bm.bmWidth <= 0
                 || bm.bmHeight <= 0
             {
                 return None;
             }
-            // Thumbnails are not necessarily square — letterbox onto a square
+            // Thumbnails are not necessarily square - letterbox onto a square
             // canvas would distort; instead just read the pixels and let the
             // frontend's object-contain do the fitting. Encode as a square by
             // using the LARGER edge; the canvas stays transparent around it.
@@ -965,15 +1037,25 @@ mod icon_ffi {
                 },
             };
             let mut bgra = vec![0u8; (w * h * 4) as usize];
-            if GetDIBits(hdc, hbm, 0, h as u32, bgra.as_mut_ptr() as _, &mut bmi, DIB_RGB_COLORS)
-                == 0
+            if GetDIBits(
+                hdc,
+                hbm,
+                0,
+                h as u32,
+                bgra.as_mut_ptr() as _,
+                &mut bmi,
+                DIB_RGB_COLORS,
+            ) == 0
             {
                 return None;
             }
 
-            // BGRA → RGBA on a square transparent canvas (edge = max(w, h))
+            // BGRA -> RGBA on a square transparent canvas (edge = max(w, h))
             let edge = w.max(h) as u32;
-            let (off_x, off_y) = (((edge as i32 - w) / 2) as u32, ((edge as i32 - h) / 2) as u32);
+            let (off_x, off_y) = (
+                ((edge as i32 - w) / 2) as u32,
+                ((edge as i32 - h) / 2) as u32,
+            );
             let mut pixels = vec![0u8; (edge * edge * 4) as usize];
             for row in 0..h as u32 {
                 for col in 0..w as u32 {
@@ -985,12 +1067,9 @@ mod icon_ffi {
                     pixels[dst + 3] = bgra[src + 3];
                 }
             }
-            // Providers that ignore the alpha channel leave it all-zero →
+            // Providers that ignore the alpha channel leave it all-zero ->
             // treat as fully opaque (same fix as legacy mask icons)
-            if pixels
-                .chunks_exact(4)
-                .all(|c| c[3] == 0)
-            {
+            if pixels.chunks_exact(4).all(|c| c[3] == 0) {
                 for row in 0..h as u32 {
                     for col in 0..w as u32 {
                         let dst = (((row + off_y) * edge + (col + off_x)) * 4) as usize;

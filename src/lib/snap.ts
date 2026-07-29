@@ -1,15 +1,15 @@
 /**
- * Magnetic edge snapping for cell drags — pure logic, Fences-style.
+ * Magnetic edge snapping for cell drags - pure logic, Fences-style.
  * While a cell is being moved, each axis independently attracts to nearby
- * cells' edges within a small threshold: same-edge alignment (left↔left,
- * right↔right) and adjacency (my left to their right and vice versa), so
+ * cells' edges within a small threshold: same-edge alignment (left<->left,
+ * right<->right) and adjacency (my left to their right and vice versa), so
  * cells line up flush or butt against each other without pixel hunting.
  */
 import type { CellRect } from '@bindings/CellRect';
 
 export const SNAP_THRESHOLD = 8;
 
-/** Snap a proposed top-left position of a width×height box against the
+/** Snap a proposed top-left position of a widthxheight box against the
  *  other boxes; the nearest candidate within the threshold wins per axis. */
 export function snapPosition(
     x: number,

@@ -25,7 +25,7 @@ export default defineConfig({
     // 8px corners, and only a whisper of elevation
     'glass-panel': 'bg-white/75 dark:bg-[#2c2c2c]/75 backdrop-blur-xl border border-black/8 dark:border-white/10 rounded-lg shadow-md',
     'cell-empty': 'border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg',
-    // Fluent standard button: ONE uniform hairline border color (flat) —
+    // Fluent standard button: ONE uniform hairline border color (flat) -
     // per-side shading read as mismatched borders at control size
     'fluent-btn': 'px-3 py-1.5 rounded text-sm border border-black/10 dark:border-white/12 bg-black/3 dark:bg-white/6 hover:bg-black/6 dark:hover:bg-white/10 active:bg-black/3 dark:active:bg-white/4 transition-colors',
     // Fluent accent (primary) button: borderless accent fill; the
@@ -37,7 +37,7 @@ export default defineConfig({
     // Square icon-only button (Win11 caption-button style): fixed square,
     // centered glyph, subtle rounded hover fill
     'fluent-icon-btn': 'w-6 h-6 flex items-center justify-center rounded hover:bg-black/5 dark:hover:bg-white/8 transition-colors duration-75',
-    // Win11 Mica surface: near-opaque tinted base with strong blur+saturate —
+    // Win11 Mica surface: near-opaque tinted base with strong blur+saturate -
     // flyouts/menus read as a solid material, unlike the lighter acrylic cards
     'mica-panel': 'bg-[#f3f3f3]/90 dark:bg-[#202020]/90 backdrop-blur-2xl backdrop-saturate-150 border border-black/8 dark:border-white/10 rounded-lg shadow-lg',
   },
