@@ -1,4 +1,4 @@
-// Minimal cn() implementation — merges class names without external deps.
+// Minimal cn() implementation - merges class names without external deps.
 // Supports strings, arrays, and conditional objects.
 
 type CnInput = string | number | boolean | null | undefined | CnInput[] | Record<string, unknown>;

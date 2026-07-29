@@ -1,8 +1,8 @@
 /**
- * Windows-like desktop grid + desktop⇄config reconcile logic.
+ * Windows-like desktop grid + desktop<->config reconcile logic.
  *
  * Free icons live in fixed-size slots filled top-to-bottom, then
- * left-to-right (column-major) — exactly like the native desktop. All
+ * left-to-right (column-major) - exactly like the native desktop. All
  * functions here are pure so they can be unit-tested; the -1 position
  * sentinel marks icons that still need a slot assigned.
  */
@@ -12,13 +12,13 @@ import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { CellRect } from '@bindings/CellRect';
 
-/** Slot metrics (CSS px) — close to Windows 11 medium-icon spacing. */
+/** Slot metrics (CSS px) - close to Windows 11 medium-icon spacing. */
 export const GRID = { cellW: 76, cellH: 100, originX: 10, originY: 6 } as const;
 
-/** Height of a cell's title bar — also a collapsed cell's full height. */
+/** Height of a cell's title bar - also a collapsed cell's full height. */
 export const CELL_TITLEBAR_H = 32;
 
-/** The screen space a cell actually occupies — collapsed cells free up
+/** The screen space a cell actually occupies - collapsed cells free up
  *  everything below their title bar (for drops and slot allocation). */
 export function effectiveCellRect(c: Cell): CellRect {
     return c.collapsed ? { ...c.rect, height: CELL_TITLEBAR_H } : c.rect;
@@ -28,6 +28,9 @@ export interface Size {
     width: number;
     height: number;
 }
+
+export type SortField = 'name' | 'type' | 'modified';
+export type SortDirection = 'asc' | 'desc';
 
 function slotPos(col: number, row: number): { x: number; y: number } {
     return { x: GRID.originX + col * GRID.cellW, y: GRID.originY + row * GRID.cellH };
@@ -86,7 +89,7 @@ export function allocateSlots(
 
 /**
  * Snap a drop position to the nearest slot NOT occupied by another icon and
- * not covered by a cell — Windows never stacks icons when snapping is on.
+ * not covered by a cell - Windows never stacks icons when snapping is on.
  * Falls back to plain snapping when every slot is taken.
  */
 export function nearestFreeSlot(
@@ -123,6 +126,19 @@ export function displayName(path: string, isDir: boolean): string {
     return stem || base;
 }
 
+/**
+ * Resolve the label for a saved desktop icon. Icon names are persisted without
+ * file extensions, while folders retain their full names. Comparing the saved
+ * name with the path stem lets the UI restore an extension for files without
+ * mistaking a folder named "archive.zip" for a file.
+ */
+export function displayIconName(icon: Pick<DesktopIcon, 'name' | 'path'>, showFileExtensions: boolean): string {
+    const base = icon.path.split(/[\\/]/).pop() ?? icon.path;
+    const stem = base.replace(/(?<=.)\.[^.]+$/, '');
+    if (base === stem || icon.name !== stem) return icon.name;
+    return showFileExtensions ? base : stem;
+}
+
 /** Parent directory of a path, lowercased (for desktop-ownership checks). */
 function parentDirLower(path: string): string {
     const low = path.toLowerCase();
@@ -145,7 +161,7 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
     const gone = (p: string) => dirs.has(parentDirLower(p)) && !present.has(p.toLowerCase());
 
     const freeKept = cfg.free_icons.filter((i) => !gone(i.path));
-    // Preserve object identity for untouched cells — Desktop's <For> keys by
+    // Preserve object identity for untouched cells - Desktop's <For> keys by
     // reference, so a new object recreates the whole CellBox mid-gesture
     // (dropping live hover/resize state) even when the cell didn't change.
     const cells = cfg.cells.map((c) => {
@@ -206,4 +222,42 @@ export function arrangeFreeIcons(cfg: DeskConfig, viewport: Size): DeskConfig {
         ...cfg,
         free_icons: cfg.free_icons.map((i, n) => ({ ...i, pos_x: slots[n]!.x, pos_y: slots[n]!.y })),
     };
+}
+
+/** Sort free desktop icons using the latest native scan, then place them in
+ * Windows-style grid order. Entries not present in a scan sort after known
+ * desktop entries so visual-only items remain stable and visible. */
+export function sortFreeIcons(
+    cfg: DeskConfig,
+    scan: DesktopScan,
+    field: SortField,
+    direction: SortDirection,
+    viewport: Size,
+): DeskConfig {
+    const metadata = new Map(scan.entries.map((entry) => [entry.path.toLowerCase(), entry]));
+    const typeOf = (path: string) => {
+        const entry = metadata.get(path.toLowerCase());
+        if (!entry) return '\uffff';
+        if (entry.is_dir) return 'folder';
+        return path.split(/[\\/]/).pop()?.split('.').pop()?.toLowerCase() ?? '';
+    };
+    const compareText = (left: string, right: string) => left.localeCompare(right, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+    });
+    const multiplier = direction === 'asc' ? 1 : -1;
+    const free_icons = [...cfg.free_icons].sort((left, right) => {
+        const leftEntry = metadata.get(left.path.toLowerCase());
+        const rightEntry = metadata.get(right.path.toLowerCase());
+        let result: number;
+        if (field === 'modified') {
+            result = (leftEntry?.modified_at_millis ?? -1) - (rightEntry?.modified_at_millis ?? -1);
+        } else if (field === 'type') {
+            result = compareText(typeOf(left.path), typeOf(right.path));
+        } else {
+            result = compareText(left.name, right.name);
+        }
+        return (result || compareText(left.name, right.name)) * multiplier;
+    });
+    return arrangeFreeIcons({ ...cfg, free_icons }, viewport);
 }

@@ -5,9 +5,9 @@ const OTHER = { x: 100, y: 100, width: 200, height: 150 };
 
 describe('snapPosition', () => {
     it('aligns same edges within the threshold', () => {
-        // left↔left and top↔top
+        // left<->left and top<->top
         expect(snapPosition(105, 94, 50, 50, [OTHER])).toEqual({ x: 100, y: 100 });
-        // right↔right: my right (x+50) to their right (300) → x = 250
+        // right<->right: my right (x+50) to their right (300) -> x = 250
         expect(snapPosition(246, 400, 50, 50, [OTHER]).x).toBe(250);
     });
 

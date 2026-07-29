@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 const cache = new Map<string, string>();
 const pending = new Map<string, Promise<string>>();
 
-/** Synchronous lookup — used by the drag ghost. */
+/** Synchronous lookup - used by the drag ghost. */
 export function getCachedIcon(path: string): string | undefined {
     return cache.get(path);
 }

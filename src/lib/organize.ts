@@ -1,7 +1,7 @@
 /**
  * One-click organize: sort every free icon into categorized cells
  * (folders / apps / documents / images / media / archives / others),
- * Coodesker-style. Pure logic — testable without Tauri.
+ * Coodesker-style. Pure logic - testable without Tauri.
  *
  * Re-running organize merges into existing same-title cells instead of
  * creating duplicates; user-made cells and their icons are never touched.
@@ -58,7 +58,7 @@ export function categorize(icon: DesktopIcon, dirPaths: ReadonlySet<string>): Ca
     return EXT_CATEGORY.get(base.slice(dot + 1).toLowerCase()) ?? 'others';
 }
 
-// ── Cell layout ────────────────────────────────────────────────────────────
+// -- Cell layout ------------------------------------------------------------
 
 const CELL_W = 320;
 const GAP = 24;
@@ -81,13 +81,19 @@ function cellHeight(count: number): number {
 export function organizeConfig(
     cfg: DeskConfig,
     dirPaths: ReadonlySet<string>,
+    excludedPaths: ReadonlySet<string>,
     viewport: Size,
     titles: Record<CategoryKey, string>,
 ): DeskConfig {
     if (cfg.free_icons.length === 0) return cfg;
 
     const buckets = new Map<CategoryKey, DesktopIcon[]>();
+    const free_icons: DesktopIcon[] = [];
     for (const icon of cfg.free_icons) {
+        if (excludedPaths.has(icon.path.toLowerCase())) {
+            free_icons.push(icon);
+            continue;
+        }
         const cat = categorize(icon, dirPaths);
         buckets.set(cat, [...(buckets.get(cat) ?? []), icon]);
     }
@@ -123,6 +129,8 @@ export function organizeConfig(
             background_color: null,
             opacity: 0.85,
             layout: 'Grid',
+            sort_field: 'name',
+            sort_direction: 'asc',
             collapsed: false,
             hover_expand: false,
             icons,
@@ -135,5 +143,5 @@ export function organizeConfig(
         rowMaxH = Math.max(rowMaxH, height);
     }
 
-    return { ...cfg, cells: [...cells, ...newCells], free_icons: [] };
+    return { ...cfg, cells: [...cells, ...newCells], free_icons };
 }

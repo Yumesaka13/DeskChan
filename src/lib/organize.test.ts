@@ -7,8 +7,8 @@ import { categorize, organizeConfig, type CategoryKey } from './organize';
 const VIEWPORT = { width: 1920, height: 1080 };
 
 const TITLES: Record<CategoryKey, string> = {
-    folders: '文件夹', apps: '应用', documents: '文档', images: '图片',
-    media: '影音', archives: '压缩包', others: '其他',
+    folders: '\u6587\u4EF6\u5939', apps: '\u5E94\u7528', documents: '\u6587\u6863', images: '\u56FE\u7247',
+    media: '\u5F71\u97F3', archives: '\u538B\u7F29\u5305', others: '\u5176\u4ED6',
 };
 
 function icon(path: string): DesktopIcon {
@@ -20,6 +20,7 @@ function cell(title: string, icons: DesktopIcon[] = []): Cell {
         id: `cell-${title}`, title,
         rect: { x: 900, y: 500, width: 320, height: 240 },
         background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
+        sort_field: 'name', sort_direction: 'asc',
         hover_expand: true, icons, sub_cells: [], active_sub: null, sub_style: 'Compact',
         show_title: true,
     };
@@ -30,6 +31,10 @@ function cfg(partial?: Partial<DeskConfig>): DeskConfig {
         version: 3, cells: [], free_icons: [], auto_arrange: false,
         snap_to_grid: true, theme: 'auto',
         ...partial,
+        use_styled_file_menu: partial?.use_styled_file_menu ?? true,
+        show_file_extensions: partial?.show_file_extensions ?? true,
+        excluded_from_organize: partial?.excluded_from_organize ?? [],
+        desktop_overlay_opacity: partial?.desktop_overlay_opacity ?? 0.01,
     };
 }
 
@@ -47,7 +52,7 @@ describe('categorize', () => {
         ['C:\\Desktop\\backup.7z', 'archives'],
         ['C:\\Desktop\\mystery.xyz', 'others'],
         ['C:\\Desktop\\no-extension', 'others'],
-    ])('%s → %s', (path, expected) => {
+    ])('%s -> %s', (path, expected) => {
         expect(categorize(icon(path), dirs)).toBe(expected);
     });
 
@@ -65,9 +70,9 @@ describe('organizeConfig', () => {
                 icon('C:\\D\\pic.png'),
             ],
         });
-        const result = organizeConfig(config, new Set(), VIEWPORT, TITLES);
+        const result = organizeConfig(config, new Set(), new Set(), VIEWPORT, TITLES);
         expect(result.free_icons).toHaveLength(0);
-        expect(result.cells.map((c) => c.title)).toEqual(['应用', '文档', '图片']);
+        expect(result.cells.map((c) => c.title)).toEqual(['\u5E94\u7528', '\u6587\u6863', '\u56FE\u7247']);
         // Cells flow left-to-right without overlapping
         const xs = result.cells.map((c) => c.rect.x);
         expect(new Set(xs).size).toBe(3);
@@ -76,9 +81,9 @@ describe('organizeConfig', () => {
     });
 
     it('merges into an existing cell with the same title on repeat organize', () => {
-        const existing = cell('应用', [icon('C:\\D\\old.exe')]);
+        const existing = cell('\u5E94\u7528', [icon('C:\\D\\old.exe')]);
         const config = cfg({ cells: [existing], free_icons: [icon('C:\\D\\new.exe')] });
-        const result = organizeConfig(config, new Set(), VIEWPORT, TITLES);
+        const result = organizeConfig(config, new Set(), new Set(), VIEWPORT, TITLES);
         expect(result.cells).toHaveLength(1);
         expect(result.cells[0]!.icons.map((i) => i.path)).toEqual(['C:\\D\\old.exe', 'C:\\D\\new.exe']);
         // Merged cell keeps its position
@@ -87,13 +92,13 @@ describe('organizeConfig', () => {
 
     it('leaves user cells untouched and returns same config when nothing to organize', () => {
         const config = cfg({ cells: [cell('My Stuff', [icon('C:\\D\\keep.txt')])] });
-        expect(organizeConfig(config, new Set(), VIEWPORT, TITLES)).toBe(config);
+        expect(organizeConfig(config, new Set(), new Set(), VIEWPORT, TITLES)).toBe(config);
     });
 
     it('uses the scan to classify folders (paths have no extension marker)', () => {
         const config = cfg({ free_icons: [icon('C:\\D\\Projects'), icon('C:\\D\\Notes.txt')] });
-        const result = organizeConfig(config, new Set(['c:\\d\\projects']), VIEWPORT, TITLES);
-        expect(result.cells.map((c) => c.title)).toEqual(['文件夹', '文档']);
+        const result = organizeConfig(config, new Set(['c:\\d\\projects']), new Set(), VIEWPORT, TITLES);
+        expect(result.cells.map((c) => c.title)).toEqual(['\u6587\u4EF6\u5939', '\u6587\u6863']);
     });
 
     it('wraps cells to the next row at the viewport edge', () => {
@@ -104,7 +109,7 @@ describe('organizeConfig', () => {
             ],
         });
         // Narrow viewport: only 2 cells per row
-        const result = organizeConfig(config, new Set(), { width: 800, height: 1080 }, TITLES);
+        const result = organizeConfig(config, new Set(), new Set(), { width: 800, height: 1080 }, TITLES);
         const rows = new Set(result.cells.map((c) => c.rect.y));
         expect(rows.size).toBeGreaterThan(1);
         // No two cells share a position
@@ -114,8 +119,22 @@ describe('organizeConfig', () => {
 
     it('sizes cells by icon count', () => {
         const many = Array.from({ length: 12 }, (_, n) => icon(`C:\\D\\f${n}.png`));
-        const result = organizeConfig(cfg({ free_icons: many }), new Set(), VIEWPORT, TITLES);
-        const single = organizeConfig(cfg({ free_icons: [icon('C:\\D\\one.png')] }), new Set(), VIEWPORT, TITLES);
+        const result = organizeConfig(cfg({ free_icons: many }), new Set(), new Set(), VIEWPORT, TITLES);
+        const single = organizeConfig(cfg({ free_icons: [icon('C:\\D\\one.png')] }), new Set(), new Set(), VIEWPORT, TITLES);
         expect(result.cells[0]!.rect.height).toBeGreaterThan(single.cells[0]!.rect.height);
     });
+});
+
+it('leaves excluded free icons in place', () => {
+    const keep = icon('C:\\D\\keep.pdf');
+    const move = icon('C:\\D\\move.png');
+    const result = organizeConfig(
+        cfg({ free_icons: [keep, move] }),
+        new Set(),
+        new Set([keep.path.toLowerCase()]),
+        VIEWPORT,
+        TITLES,
+    );
+    expect(result.free_icons).toEqual([keep]);
+    expect(result.cells[0]!.icons).toEqual([move]);
 });

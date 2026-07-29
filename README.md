@@ -1,4 +1,4 @@
-# DeskChan — Desktop Fence Tool
+# DeskChan - Desktop Fence Tool
 
 A **Windows desktop organizer** inspired by [Coodesker](https://www.coodesker.com/) / Stardock Fences. DeskChan hides the native desktop icons and renders its own interactive overlay with free-form icon grid and draggable fence cells.
 
@@ -28,7 +28,7 @@ Built with **Tauri v2** + **SolidJS** + **UnoCSS** + **Bun**.
 
 ### One-Click Organize
 
-- **Auto-Organize**: sorts all free icons into categorized cells — **Folders**, **Applications** (`.exe`, `.lnk`, `.bat`, `.cmd`, `.msc`), and **Files**
+- **Auto-Organize**: sorts all free icons into categorized cells - **Folders**, **Applications** (`.exe`, `.lnk`, `.bat`, `.cmd`, `.msc`), and **Files**
 - **Reset Config**: deletes config file so next launch re-scans the desktop
 
 ---
@@ -52,8 +52,8 @@ Built with **Tauri v2** + **SolidJS** + **UnoCSS** + **Bun**.
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| [Bun](https://bun.sh/) | ≥ 1.1 | JavaScript runtime & package manager |
-| [Rust](https://www.rust-lang.org/) | ≥ 1.81 | Rust toolchain |
+| [Bun](https://bun.sh/) | >= 1.1 | JavaScript runtime & package manager |
+| [Rust](https://www.rust-lang.org/) | >= 1.81 | Rust toolchain |
 | [Tauri CLI](https://v2.tauri.app/start/cli/) | 2.x | `cargo install tauri-cli --version ^2` |
 
 ---
@@ -76,43 +76,43 @@ The app will open a full-screen transparent overlay that covers your desktop wal
 
 ```
 DeskChan/
-├── src/                          # Frontend (SolidJS + TypeScript)
-│   ├── App.tsx                   # Root component (providers)
-│   ├── main.tsx                  # Entry point
-│   ├── components/
-│   │   ├── Desktop.tsx           # Main surface: free icons, cells, drag, menus
-│   │   └── ui/
-│   │       ├── CellBox.tsx       # Draggable/resizable/collapsible fence cell
-│   │       ├── ContextMenu.tsx   # Right-click context menu (Portal)
-│   │       ├── DesktopIcon.tsx   # Single file shortcut icon component
-│   │       └── SettingsDialog.tsx# Settings modal (theme, language, titles)
-│   ├── i18n/                     # Translation files
-│   │   ├── index.tsx             # i18n provider & hook
-│   │   ├── zh-CN.ts              # Chinese translations
-│   │   └── en-US.ts              # English translations
-│   ├── lib/
-│   │   ├── utils.ts              # `cn()` class merging
-│   │   └── theme.tsx             # Theme provider (light/dark/auto)
-│   ├── styles/
-│   │   └── global.css            # Scrollbars, animations, theme transitions
-│   └── vite-env.d.ts             # TypeScript type declarations
-│
-├── src-tauri/                    # Backend (Rust)
-│   ├── src/
-│   │   ├── main.rs               # Windows entry point
-│   │   ├── lib.rs                # Tauri app setup, plugin registration, first-launch scan
-│   │   ├── window_manager.rs     # Win32 window management: AppBar, WndProc, SysListView32, icon extraction
-│   │   ├── bindings.rs           # All Tauri commands (thin proxy layer)
-│   │   └── config.rs             # Data models (DesktopIcon, Cell, DeskConfig), TOML persistence
-│   ├── bindings/                 # Generated TS type bindings (ts-rs)
-│   ├── tauri.conf.json           # Tauri configuration
-│   └── Cargo.toml                # Rust dependencies
-│
-├── package.json
-├── uno.config.ts
-├── vite.config.ts
-├── tsconfig.json
-└── README.md
+|---- src/                          # Frontend (SolidJS + TypeScript)
+|   |---- App.tsx                   # Root component (providers)
+|   |---- main.tsx                  # Entry point
+|   |---- components/
+|   |   |---- Desktop.tsx           # Main surface: free icons, cells, drag, menus
+|   |   `---- ui/
+|   |       |---- CellBox.tsx       # Draggable/resizable/collapsible fence cell
+|   |       |---- ContextMenu.tsx   # Right-click context menu (Portal)
+|   |       |---- DesktopIcon.tsx   # Single file shortcut icon component
+|   |       `---- SettingsDialog.tsx# Settings modal (theme, language, titles)
+|   |---- i18n/                     # Translation files
+|   |   |---- index.tsx             # i18n provider & hook
+|   |   |---- zh-CN.ts              # Chinese translations
+|   |   `---- en-US.ts              # English translations
+|   |---- lib/
+|   |   |---- utils.ts              # `cn()` class merging
+|   |   `---- theme.tsx             # Theme provider (light/dark/auto)
+|   |---- styles/
+|   |   `---- global.css            # Scrollbars, animations, theme transitions
+|   `---- vite-env.d.ts             # TypeScript type declarations
+|
+|---- src-tauri/                    # Backend (Rust)
+|   |---- src/
+|   |   |---- main.rs               # Windows entry point
+|   |   |---- lib.rs                # Tauri app setup, plugin registration, first-launch scan
+|   |   |---- window_manager.rs     # Win32 window management: AppBar, WndProc, SysListView32, icon extraction
+|   |   |---- bindings.rs           # All Tauri commands (thin proxy layer)
+|   |   `---- config.rs             # Data models (DesktopIcon, Cell, DeskConfig), TOML persistence
+|   |---- bindings/                 # Generated TS type bindings (ts-rs)
+|   |---- tauri.conf.json           # Tauri configuration
+|   `---- Cargo.toml                # Rust dependencies
+|
+|---- package.json
+|---- uno.config.ts
+|---- vite.config.ts
+|---- tsconfig.json
+`---- README.md
 ```
 
 ---
@@ -122,20 +122,20 @@ DeskChan/
 ### How It Works
 
 1. **Window**: A borderless, transparent, skip-taskbar window covers the work area (excluding taskbar)
-2. **Desktop hiding**: On startup, Rust finds the `SysListView32` control (the native desktop icon renderer) and calls `ShowWindow(SW_HIDE)` — icons disappear
+2. **Desktop hiding**: On startup, Rust finds the `SysListView32` control (the native desktop icon renderer) and calls `ShowWindow(SW_HIDE)` - icons disappear
 3. **Overlay rendering**: SolidJS renders free-floating icons in a grid and fence cells on top
-4. **Icon extraction**: System file icons are fetched via `SHGetFileInfoW` → `CreateDIBSection` → `DrawIconEx` → PNG base64 → inline `<img>`
+4. **Icon extraction**: System file icons are fetched via `SHGetFileInfoW` -> `CreateDIBSection` -> `DrawIconEx` -> PNG base64 -> inline `<img>`
 5. **Drag & drop**: Uses **Pointer Events** (not HTML5 Drag API, which conflicts with window styles in WebView2)
-6. **Win+D**: Three-layer defense — AppBar registration + WndProc interception + Z-order counter-attack
+6. **Win+D**: Three-layer defense - AppBar registration + WndProc interception + Z-order counter-attack
 
 ### Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
 | **Files never leave the desktop** | Paths are stored in config; the app is a visual overlay only |
-| **No file movement** | Unlike naive implementations, DeskChan does NOT move files between directories — it only manages their visual representation |
+| **No file movement** | Unlike naive implementations, DeskChan does NOT move files between directories - it only manages their visual representation |
 | **Pointer Events over HTML5 Drag** | HTML5 drag-and-drop breaks with `WS_EX_TOOLWINDOW` / `WS_EX_NOACTIVATE` in WebView2 |
-| **Raw Win32 FFI** | No `windows` crate dependency — avoids version conflicts with Tauri's internal `windows-core` |
+| **Raw Win32 FFI** | No `windows` crate dependency - avoids version conflicts with Tauri's internal `windows-core` |
 | **TOML config** | Human-readable, easy to debug and edit manually |
 
 ---

@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
 import { activeIcons, allIcons, deleteSubCell, removeIcon, reorderIcons, totalIconCount, withActiveIcons } from './cell';
@@ -21,6 +21,8 @@ function cell(partial?: Partial<Cell>): Cell {
         active_sub: null,
         sub_style: 'Compact', show_title: true,
         ...partial,
+        sort_field: partial?.sort_field ?? 'name',
+        sort_direction: partial?.sort_direction ?? 'asc',
     };
 }
 

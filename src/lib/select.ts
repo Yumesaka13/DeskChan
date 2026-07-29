@@ -1,5 +1,5 @@
 /**
- * Marquee (rubber-band) selection helpers — pure logic, testable without DOM.
+ * Marquee (rubber-band) selection helpers - pure logic, testable without DOM.
  * Free desktop icons are selected when their bounding box intersects the
  * dragged rectangle, matching native Windows behavior.
  */
@@ -36,7 +36,7 @@ export function rectsIntersect(a: Rect, b: Rect): boolean {
 }
 
 /** Ids of free icons whose box intersects the marquee. Skips unplaced
- *  (sentinel-positioned) icons — they are not visible yet. */
+ *  (sentinel-positioned) icons - they are not visible yet. */
 export function iconsInRect(icons: readonly DesktopIcon[], marquee: Rect): string[] {
     return icons
         .filter((i) => i.pos_x >= 0 && i.pos_y >= 0)

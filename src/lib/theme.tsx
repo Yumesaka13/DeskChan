@@ -43,7 +43,7 @@ export function ThemeProvider(props: ParentProps) {
                 setResolvedTheme(e.matches ? 'dark' : 'light');
             };
             mq.addEventListener('change', handler);
-            // Cleanup not needed in Solid's createEffect — but we use a simple approach;
+            // Cleanup not needed in Solid's createEffect - but we use a simple approach;
             // the listener will persist for the lifetime of the app.
         } else {
             resolved = t;

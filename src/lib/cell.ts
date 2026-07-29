@@ -1,5 +1,5 @@
 /**
- * Cell/sub-box helpers — pure logic for the tabbed sub-cell system.
+ * Cell/sub-box helpers - pure logic for the tabbed sub-cell system.
  * A cell's icon containers are its own `icons` (the implicit first tab)
  * plus one per sub-cell; `active_sub` selects which container the UI shows
  * and which one receives added/dropped icons.
@@ -41,7 +41,7 @@ export function totalIconCount(c: Cell): number {
     return c.icons.length + c.sub_cells.reduce((n, s) => n + s.icons.length, 0);
 }
 
-/** Every icon in the cell — own list plus every sub-box. */
+/** Every icon in the cell - own list plus every sub-box. */
 export function allIcons(c: Cell): DesktopIcon[] {
     return [...c.icons, ...c.sub_cells.flatMap((s) => s.icons)];
 }

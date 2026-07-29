@@ -1,8 +1,8 @@
-﻿import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { DeskConfig } from '@bindings/DeskConfig';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
 import type { DesktopScan } from '@bindings/DesktopScan';
-import { GRID, allocateSlots, arrangeFreeIcons, displayName, reconcileConfig, snapToGrid } from './grid';
+import { GRID, allocateSlots, arrangeFreeIcons, displayIconName, displayName, reconcileConfig, snapToGrid, sortFreeIcons } from './grid';
 
 const VIEWPORT = { width: 1920, height: 1080 };
 
@@ -19,11 +19,15 @@ function cfg(partial?: Partial<DeskConfig>): DeskConfig {
         snap_to_grid: true,
         theme: 'auto',
         ...partial,
+        use_styled_file_menu: partial?.use_styled_file_menu ?? true,
+        show_file_extensions: partial?.show_file_extensions ?? true,
+        excluded_from_organize: partial?.excluded_from_organize ?? [],
+        desktop_overlay_opacity: partial?.desktop_overlay_opacity ?? 0.01,
     };
 }
 
 function scan(paths: string[], dirs = ['C:\\Users\\me\\Desktop']): DesktopScan {
-    return { dirs, entries: paths.map((path) => ({ path, is_dir: false })) };
+    return { dirs, entries: paths.map((path) => ({ path, is_dir: false, modified_at_millis: 0 })) };
 }
 
 describe('snapToGrid', () => {
@@ -54,7 +58,7 @@ describe('allocateSlots', () => {
     });
 
     it('reuses slots instead of going offscreen when the desktop is full', () => {
-        const slots = allocateSlots(10, [], [], { width: 100, height: 120 }); // 1脳1 grid
+        const slots = allocateSlots(10, [], [], { width: 100, height: 120 }); // 1\u81331 grid
         expect(slots).toHaveLength(10);
         expect(slots.every((s) => s.x === GRID.originX && s.y === GRID.originY)).toBe(true);
     });
@@ -76,6 +80,7 @@ describe('reconcileConfig', () => {
                 id: 'c1', title: 'Cell',
                 rect: { x: 500, y: 500, width: 320, height: 240 },
                 background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
+                sort_field: 'name', sort_direction: 'asc',
                 hover_expand: true, sub_cells: [], active_sub: null, sub_style: 'Compact', show_title: true,
                 icons: [icon('C:\\Users\\me\\Desktop\\also-gone.txt', 0, 0)],
             }],
@@ -98,12 +103,13 @@ describe('reconcileConfig', () => {
                 id: 'c1', title: 'Cell',
                 rect: { x: 500, y: 500, width: 320, height: 240 },
                 background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
+                sort_field: 'name', sort_direction: 'asc',
                 hover_expand: true, sub_cells: [], active_sub: null, sub_style: 'Compact', show_title: true,
                 icons: [icon(path, 0, 0)],
             }],
         });
         const result = reconcileConfig(config, scan([path.toUpperCase()]), VIEWPORT);
-        expect(result).toBe(config); // path match is case-insensitive 鈫?no change
+        expect(result).toBe(config); // path match is case-insensitive \u922B?no change
     });
 
     it('assigns slots to sentinel (-1) icons without moving placed ones', () => {
@@ -137,6 +143,50 @@ describe('arrangeFreeIcons', () => {
             .toEqual({ x: GRID.originX, y: GRID.originY });
         expect({ x: result.free_icons[1]!.pos_x, y: result.free_icons[1]!.pos_y })
             .toEqual({ x: GRID.originX, y: GRID.originY + GRID.cellH });
+    });
+});
+
+describe('displayIconName', () => {
+    it('restores a file extension from the path when enabled', () => {
+        const report = icon('C:\\Users\\me\\Desktop\\report.final.pdf');
+        expect(report.name).toBe('report.final');
+        expect(displayIconName(report, true)).toBe('report.final.pdf');
+        expect(displayIconName(report, false)).toBe('report.final');
+    });
+
+    it('does not treat a folder-like saved name as a removable extension', () => {
+        const folder: DesktopIcon = {
+            ...icon('C:\\Users\\me\\Desktop\\archive.zip'),
+            name: 'archive.zip',
+        };
+        expect(displayIconName(folder, true)).toBe('archive.zip');
+        expect(displayIconName(folder, false)).toBe('archive.zip');
+    });
+});
+
+describe('sortFreeIcons', () => {
+    it('sorts by name, type, and modification time in either direction', () => {
+        const config = cfg({
+            free_icons: [
+                icon('C:\\Users\\me\\Desktop\\zeta.txt', 0, 0),
+                icon('C:\\Users\\me\\Desktop\\Alpha.png', 0, 0),
+                icon('C:\\Users\\me\\Desktop\\Folder', 0, 0),
+            ],
+        });
+        const desktopScan: DesktopScan = {
+            dirs: ['C:\\Users\\me\\Desktop'],
+            entries: [
+                { path: 'C:\\Users\\me\\Desktop\\zeta.txt', is_dir: false, modified_at_millis: 20 },
+                { path: 'C:\\Users\\me\\Desktop\\Alpha.png', is_dir: false, modified_at_millis: 30 },
+                { path: 'C:\\Users\\me\\Desktop\\Folder', is_dir: true, modified_at_millis: 10 },
+            ],
+        };
+        expect(sortFreeIcons(config, desktopScan, 'name', 'asc', VIEWPORT).free_icons.map((item) => item.name))
+            .toEqual(['Alpha', 'Folder', 'zeta']);
+        expect(sortFreeIcons(config, desktopScan, 'type', 'asc', VIEWPORT).free_icons.map((item) => item.name))
+            .toEqual(['Folder', 'Alpha', 'zeta']);
+        expect(sortFreeIcons(config, desktopScan, 'modified', 'desc', VIEWPORT).free_icons.map((item) => item.name))
+            .toEqual(['Alpha', 'zeta', 'Folder']);
     });
 });
 

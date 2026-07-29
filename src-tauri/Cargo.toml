@@ -7,14 +7,17 @@ edition = "2021"
 name = "deskchan_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Required when building a portable release executable outside Tauri's
+# installer flow: embed `frontendDist` instead of loading `build.devUrl`.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,5 +30,5 @@ base64 = "0.22"
 notify = "8"
 
 [target.'cfg(windows)'.dependencies]
-# No external crate needed — we use raw Win32 FFI in window_manager.rs
+# No external crate needed - we use raw Win32 FFI in window_manager.rs
 # to avoid version conflicts with Tauri's internal windows-core dependency.
