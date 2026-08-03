@@ -40,6 +40,25 @@ pub async fn open_file(
     tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn start_native_file_drag(
+    state: tauri::State<'_, Arc<DeskState>>,
+    authorizations: tauri::State<'_, PathAuthorizations>,
+    paths: Vec<String>,
+) -> Result<u32, String> {
+    if paths.is_empty() || paths.len() > 64 {
+        return Err("invalid file selection".into());
+    }
+    let paths = paths
+        .iter()
+        .map(|path| authorizations.resolve(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    state.dragging.store(true, Ordering::Relaxed);
+    let result = crate::native_drag::drag_files(paths);
+    state.dragging.store(false, Ordering::Relaxed);
+    result
+}
+
 /// Explorer-like operations used by the styled file menu. Paths are resolved
 /// through the same authorization registry as open/drop operations.
 #[tauri::command]
