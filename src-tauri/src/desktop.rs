@@ -23,6 +23,13 @@ pub struct FileMutation {
     pub record: FileUndoRecord,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RenamedIconMutation {
+    pub path: String,
+    pub name: String,
+    pub record: FileUndoRecord,
+}
+
 #[cfg(target_os = "windows")]
 const FOLDERID_DESKTOP: crate::win32::Guid = crate::win32::Guid {
     d1: 0xb4bfcc3a,
@@ -166,16 +173,7 @@ pub fn list_entries() -> Vec<(PathBuf, bool)> {
 /// Build a DesktopIcon for a desktop entry. Position uses the -1 sentinel:
 /// the frontend assigns the first free grid slot on reconcile.
 pub fn make_icon(path: &Path, is_dir: bool) -> crate::config::DesktopIcon {
-    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
-    // Folders keep their full name; files hide the extension (like Explorer)
-    let display = if is_dir {
-        name.to_string()
-    } else {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(name)
-            .to_string()
-    };
+    let display = display_name(path, is_dir);
     crate::config::DesktopIcon {
         id: uuid::Uuid::new_v4().to_string(),
         name: display,
@@ -183,6 +181,19 @@ pub fn make_icon(path: &Path, is_dir: bool) -> crate::config::DesktopIcon {
         icon_path: None,
         pos_x: -1.0,
         pos_y: -1.0,
+    }
+}
+
+pub fn display_name(path: &Path, is_dir: bool) -> String {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+    // Folders keep their full name; files hide the extension (like Explorer)
+    if is_dir {
+        name.to_string()
+    } else {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name)
+            .to_string()
     }
 }
 
@@ -306,6 +317,86 @@ fn move_exact(source: &Path, destination: &Path) -> Result<(), String> {
     }
 }
 
+fn validate_rename_label(label: &str) -> Result<(), String> {
+    if label.is_empty() || label == "." || label == ".." {
+        return Err("invalid file name".into());
+    }
+    if label.chars().any(|ch| {
+        ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+    }) {
+        return Err("file name contains invalid characters".into());
+    }
+    Ok(())
+}
+
+fn same_filename_on_windows(left: &Path, right: &Path) -> bool {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (left, right);
+        false
+    }
+    #[cfg(target_os = "windows")]
+    {
+        left.parent() == right.parent()
+            && left
+                .file_name()
+                .zip(right.file_name())
+                .is_some_and(|(left, right)| {
+                    left.to_string_lossy()
+                        .eq_ignore_ascii_case(&right.to_string_lossy())
+                })
+    }
+}
+
+pub fn rename_with_undo(
+    source: &Path,
+    new_label: &str,
+    preserve_extension: bool,
+) -> Result<RenamedIconMutation, String> {
+    if !source.exists() {
+        return Err("source does not exist".into());
+    }
+    let label = new_label.trim();
+    validate_rename_label(label)?;
+    let parent = source.parent().ok_or("invalid source")?;
+    let filename = if preserve_extension && source.is_file() {
+        match source.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) if !ext.is_empty() => format!("{label}.{ext}"),
+            _ => label.to_string(),
+        }
+    } else {
+        label.to_string()
+    };
+    validate_rename_label(&filename)?;
+    let destination = parent.join(filename);
+    if source == destination {
+        return Ok(RenamedIconMutation {
+            path: destination.to_string_lossy().to_string(),
+            name: display_name(&destination, destination.is_dir()),
+            record: FileUndoRecord {
+                kind: "rename".into(),
+                sources: vec![source.to_string_lossy().to_string()],
+                destinations: vec![destination.to_string_lossy().to_string()],
+                backups: vec![],
+            },
+        });
+    }
+    if destination.exists() && !same_filename_on_windows(source, &destination) {
+        return Err("target already exists".into());
+    }
+    std::fs::rename(source, &destination).map_err(|e| e.to_string())?;
+    Ok(RenamedIconMutation {
+        path: destination.to_string_lossy().to_string(),
+        name: display_name(&destination, destination.is_dir()),
+        record: FileUndoRecord {
+            kind: "rename".into(),
+            sources: vec![source.to_string_lossy().to_string()],
+            destinations: vec![destination.to_string_lossy().to_string()],
+            backups: vec![],
+        },
+    })
+}
+
 pub fn move_to_desktop_with_undo(path: &str) -> Result<FileMutation, String> {
     let source = PathBuf::from(path);
     let destination = PathBuf::from(move_to_desktop(path)?);
@@ -422,7 +513,7 @@ pub fn delete_with_undo(paths: &[PathBuf], backup_root: &Path) -> Result<FileMut
 
 pub fn undo_file_operation(record: &FileUndoRecord) -> Result<(), String> {
     match record.kind.as_str() {
-        "move" => {
+        "move" | "rename" => {
             for (source, destination) in record.sources.iter().zip(&record.destinations) {
                 move_exact(Path::new(destination), Path::new(source))?;
             }
@@ -448,7 +539,7 @@ pub fn undo_file_operation(record: &FileUndoRecord) -> Result<(), String> {
 
 pub fn redo_file_operation(record: &FileUndoRecord) -> Result<(), String> {
     match record.kind.as_str() {
-        "move" => {
+        "move" | "rename" => {
             for (source, destination) in record.sources.iter().zip(&record.destinations) {
                 move_exact(Path::new(source), Path::new(destination))?;
             }

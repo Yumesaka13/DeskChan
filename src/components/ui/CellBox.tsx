@@ -48,6 +48,9 @@ export interface CellBoxProps {
     selectedIconIds?: ReadonlySet<string>;
     onSelectIcon?: (cellId: string, icon: DesktopIconData, event: MouseEvent) => void;
     onClearIconSelection?: () => void;
+    renamingIconId?: string | null;
+    onRenameIcon?: (icon: DesktopIconData, name: string) => void;
+    onRenameIconCancel?: () => void;
     showFileExtensions?: boolean;
     /** Extra white contrast layer applied only within this cell. */
     desktopOverlayOpacity?: number;
@@ -641,8 +644,11 @@ export default function CellBox(props: CellBoxProps) {
                                             ? 'flex-1 max-w-none text-left line-clamp-1'
                                             : undefined}
                                         selected={props.selectedIconIds?.has(icon.id) ?? false}
+                                        editing={props.renamingIconId === icon.id}
                                         onSelect={(selected, event) => props.onSelectIcon?.(props.cell.id, selected, event)}
                                         onOpen={props.onOpenIcon}
+                                        onRename={props.onRenameIcon}
+                                        onRenameCancel={props.onRenameIconCancel}
                                         onDragStart={props.onDragStart
                                             ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
                                             : undefined}

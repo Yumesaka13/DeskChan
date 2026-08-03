@@ -20,6 +20,7 @@ export const enUS: Translations = {
     'icon.remove': 'Remove Icon',
     'icon.open_file': 'Open File',
     'icon.open_with': 'Open With...',
+    'icon.rename': 'Rename',
     'icon.exclude_organize': 'Exclude from Auto-Organize',
     'icon.cut': 'Cut',
     'icon.copy': 'Copy',
@@ -61,6 +62,7 @@ export const enUS: Translations = {
     'toast.load_config_failed': 'Failed to load configuration',
     'toast.open_file_failed': 'Failed to open file',
     'toast.file_action_failed': 'File operation failed',
+    'toast.rename_failed': 'Rename failed',
     'toast.open_settings_failed': 'Failed to open system settings',
     'toast.drop_failed': 'Failed to receive dropped files',
     'toast.paste_failed': 'Failed to paste clipboard files',
@@ -83,6 +85,7 @@ export const enUS: Translations = {
     'history.file_move': 'Move files',
     'history.file_copy': 'Copy files',
     'history.file_delete': 'Move to Recycle Bin',
+    'history.file_rename': 'Rename file',
 
     'default.cell_title': 'Cell',
     'default.sub_title': 'Sub-box',

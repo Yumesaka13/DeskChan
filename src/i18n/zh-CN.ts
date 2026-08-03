@@ -22,6 +22,7 @@ export interface Translations {
     'icon.remove': string;
     'icon.open_file': string;
     'icon.open_with': string;
+    'icon.rename': string;
     'icon.exclude_organize': string;
     'icon.cut': string;
     'icon.copy': string;
@@ -66,6 +67,7 @@ export interface Translations {
     'toast.load_config_failed': string;
     'toast.open_file_failed': string;
     'toast.file_action_failed': string;
+    'toast.rename_failed': string;
     'toast.open_settings_failed': string;
     'toast.drop_failed': string;
     'toast.paste_failed': string;
@@ -89,6 +91,7 @@ export interface Translations {
     'history.file_move': string;
     'history.file_copy': string;
     'history.file_delete': string;
+    'history.file_rename': string;
 
     // Defaults
     'default.cell_title': string;
@@ -144,6 +147,7 @@ export const zhCN: Translations = {
     'icon.remove': '\u79FB\u9664\u56FE\u6807',
     'icon.open_file': '\u6253\u5F00\u6587\u4EF6',
     'icon.open_with': '\u9009\u62e9\u5176\u4ed6\u5e94\u7528\u6253\u5f00',
+    'icon.rename': '\u91CD\u547D\u540D',
     'icon.exclude_organize': '\u4e0d\u53c2\u4e0e\u4e00\u952e\u6574\u7406',
     'icon.cut': '\u526a\u5207',
     'icon.copy': '\u590d\u5236',
@@ -185,6 +189,7 @@ export const zhCN: Translations = {
     'toast.load_config_failed': '\u52A0\u8F7D\u914D\u7F6E\u5931\u8D25',
     'toast.open_file_failed': '\u6253\u5F00\u6587\u4EF6\u5931\u8D25',
     'toast.file_action_failed': '\u6587\u4ef6\u64cd\u4f5c\u5931\u8d25',
+    'toast.rename_failed': '\u91CD\u547D\u540D\u5931\u8D25',
     'toast.open_settings_failed': '\u65E0\u6CD5\u6253\u5F00\u7CFB\u7EDF\u8BBE\u7F6E',
     'toast.drop_failed': '\u65E0\u6CD5\u63A5\u6536\u62D6\u5165\u7684\u6587\u4EF6',
     'toast.paste_failed': '\u65e0\u6cd5\u7c98\u8d34\u526a\u8d34\u677f\u4e2d\u7684\u6587\u4ef6',
@@ -207,6 +212,7 @@ export const zhCN: Translations = {
     'history.file_move': '\u79FB\u52A8\u6587\u4EF6',
     'history.file_copy': '\u590D\u5236\u6587\u4EF6',
     'history.file_delete': '\u79FB\u5165\u56DE\u6536\u7AD9',
+    'history.file_rename': '\u91CD\u547D\u540D\u6587\u4EF6',
 
     'default.cell_title': '\u683C\u5B50',
     'default.sub_title': '\u5B50\u76D2\u5B50',

@@ -24,7 +24,7 @@ import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid, FiImage, FiMonitor, FiMoreHorizontal, FiClipboard, FiCopy, FiMove, FiTrash2, FiClock, FiX } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid, FiImage, FiMonitor, FiMoreHorizontal, FiClipboard, FiCopy, FiMove, FiTrash2, FiClock, FiX, FiEdit2 } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 export default function Desktop() {
@@ -71,6 +71,7 @@ export default function Desktop() {
     }
     interface FileUndoRecord { kind: string; sources: string[]; destinations: string[]; backups: string[]; }
     interface FileMutation { paths: string[]; record: FileUndoRecord; }
+    interface RenamedIconMutation { path: string; name: string; record: FileUndoRecord; }
     const [history, setHistory] = createSignal<HistoryState<HistoryEntry>>({ undo: [], redo: [] });
     let applyingHistory = false;
 
@@ -122,6 +123,19 @@ export default function Desktop() {
 
     // Multi-selection of free icons (marquee / ctrl+click), Windows-like
     const [selectedIds, setSelectedIds] = createSignal<ReadonlySet<string>>(new Set());
+    const [renamingIconId, setRenamingIconId] = createSignal<string | null>(null);
+    let committingRenameIconId: string | null = null;
+
+    const allConfigIcons = (cfg: DeskConfig): DIcon[] => [
+        ...cfg.free_icons,
+        ...cfg.cells.flatMap(allIcons),
+    ];
+
+    const selectedIcons = () => {
+        const cfg = config();
+        if (!cfg) return [];
+        return allConfigIcons(cfg).filter((icon) => selectedIds().has(icon.id));
+    };
 
     // A drag that ends on the pressed icon still fires a trailing click,
     // which would collapse the fresh multi-selection to one icon - swallow it.
@@ -307,6 +321,14 @@ export default function Desktop() {
                 void pasteFromClipboard('auto');
                 return;
             }
+            if (e.key === 'F2' && !editing) {
+                const icons = selectedIcons();
+                if (icons.length === 1) {
+                    e.preventDefault();
+                    startRenameIcon(icons[0]);
+                }
+                return;
+            }
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !editing) {
                 const paths = selectedPaths();
                 if (paths.length > 0) {
@@ -334,6 +356,7 @@ export default function Desktop() {
                 setDragState(null);
                 setContextMenu(null);
                 setHistoryOpen(false);
+                setRenamingIconId(null);
                 // Cancel an active marquee too - its move handler bails once
                 // the signal is null, so the cleared selection stays cleared
                 setMarquee(null);
@@ -801,7 +824,7 @@ export default function Desktop() {
             // system-menu fallback narrows only its shell invocation.
             const cfg = config();
             const sameDir = cfg
-                ? [...cfg.free_icons, ...cfg.cells.flatMap(allIcons)]
+                ? allConfigIcons(cfg)
                     .filter((i) => selectedIds().has(i.id) && sameParentDir(i.path, icon.path))
                 : [icon];
             paths = sameDir.map((i) => i.path);
@@ -813,10 +836,12 @@ export default function Desktop() {
 
     const showNativeIconMenu = async (icon: DIcon) => {
         try {
-            await invoke<number | null>('show_icon_menu', {
-                paths: nativeMenuPaths(icon),
-                extraItems: [],
+            const paths = nativeMenuPaths(icon);
+            const picked = await invoke<number | null>('show_icon_menu', {
+                paths,
+                extraItems: paths.length === 1 ? [t('icon.rename')] : [],
             });
+            if (picked === 0) startRenameIcon(icon);
         } catch {
             /* best-effort; double-click open still works */
         }
@@ -840,11 +865,59 @@ export default function Desktop() {
     };
 
     const selectedPaths = () => {
-        const cfg = config();
-        if (!cfg) return [];
-        return [...cfg.free_icons, ...cfg.cells.flatMap(allIcons)]
-            .filter((icon) => selectedIds().has(icon.id))
-            .map((icon) => icon.path);
+        return selectedIcons().map((icon) => icon.path);
+    };
+
+    const startRenameIcon = (icon: DIcon) => {
+        setFileMenu(null);
+        setContextMenu(null);
+        setSelectedIds(new Set([icon.id]));
+        setRenamingIconId(icon.id);
+    };
+
+    const renameIcon = async (icon: DIcon, name: string) => {
+        if (committingRenameIconId === icon.id) return;
+        const before = config();
+        if (!before) return;
+        committingRenameIconId = icon.id;
+        try {
+            const mutation = await invoke<RenamedIconMutation>('rename_desktop_icon_with_undo', {
+                path: icon.path,
+                name,
+                preserveExtension: !before.show_file_extensions,
+            });
+            const oldPath = icon.path.toLowerCase();
+            const updateIcon = (candidate: DIcon): DIcon =>
+                candidate.path.toLowerCase() === oldPath
+                    ? { ...candidate, path: mutation.path, name: mutation.name }
+                    : candidate;
+            const after: DeskConfig = {
+                ...before,
+                free_icons: before.free_icons.map(updateIcon),
+                excluded_from_organize: before.excluded_from_organize.map((path) =>
+                    path.toLowerCase() === oldPath ? mutation.path : path,
+                ),
+                cells: before.cells.map((cell) => ({
+                    ...cell,
+                    icons: cell.icons.map(updateIcon),
+                    sub_cells: cell.sub_cells.map((sub) => ({ ...sub, icons: sub.icons.map(updateIcon) })),
+                })),
+            };
+            setConfig(after);
+            setHistory((current) => pushHistory(current, {
+                id: crypto.randomUUID(),
+                label: t('history.file_rename'),
+                before: cloneConfig(before),
+                after: cloneConfig(after),
+                file: mutation.record,
+            }));
+            setSelectedIds(new Set([icon.id]));
+            setRenamingIconId(null);
+        } catch {
+            toast.error(t('toast.rename_failed'));
+        } finally {
+            committingRenameIconId = null;
+        }
     };
 
     const runFileAction = async (action: 'open_with' | 'cut' | 'copy' | 'delete' | 'properties') => {
@@ -967,6 +1040,9 @@ export default function Desktop() {
                         selectedIconIds={selectedIds()}
                         onSelectIcon={(_cellId, icon, event) => selectIcon(icon, event)}
                         onClearIconSelection={() => setSelectedIds(new Set<string>())}
+                        renamingIconId={renamingIconId()}
+                        onRenameIcon={(icon, name) => { void renameIcon(icon, name); }}
+                        onRenameIconCancel={() => setRenamingIconId(null)}
                         showFileExtensions={config()?.show_file_extensions ?? true}
                         desktopOverlayOpacity={config()?.desktop_overlay_opacity ?? 0.01}
                         onRename={(id, title) => updateCell(id, (c) => ({ ...c, title }))}
@@ -1021,6 +1097,9 @@ export default function Desktop() {
                             selected={selectedIds().has(icon.id)}
                             onSelect={selectIcon}
                             onOpen={openIcon}
+                            editing={renamingIconId() === icon.id}
+                            onRename={(icon, name) => { void renameIcon(icon, name); }}
+                            onRenameCancel={() => setRenamingIconId(null)}
                             onNativeMenu={(icon, event) => showFileMenu(icon, undefined, event)}
                             labelClass="desktop-icon-label"
                             onDragStart={(iconId, e) => {
@@ -1222,6 +1301,13 @@ export default function Desktop() {
                             label: t('icon.open_with'),
                             icon: <FiMoreHorizontal />,
                             onClick: () => { void runFileAction('open_with'); },
+                        },
+                        {
+                            label: t('icon.rename'),
+                            icon: <FiEdit2 />,
+                            shortcut: 'F2',
+                            disabled: selectedIds().has(fileMenu()!.icon.id) && selectedIds().size !== 1,
+                            onClick: () => startRenameIcon(fileMenu()!.icon),
                         },
                         ...(!fileMenu()!.cellId ? [
                             {

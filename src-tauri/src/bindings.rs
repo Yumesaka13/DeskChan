@@ -268,13 +268,26 @@ pub async fn delete_with_undo(
 }
 
 #[tauri::command]
+pub async fn rename_desktop_icon_with_undo(
+    authorizations: tauri::State<'_, PathAuthorizations>,
+    path: String,
+    name: String,
+    preserve_extension: bool,
+) -> Result<desktop::RenamedIconMutation, String> {
+    let path = authorizations.resolve(&path)?;
+    let mutation = desktop::rename_with_undo(&path, &name, preserve_extension)?;
+    authorizations.authorize([PathBuf::from(&mutation.path)]);
+    Ok(mutation)
+}
+
+#[tauri::command]
 pub async fn undo_file_operation(
     authorizations: tauri::State<'_, PathAuthorizations>,
     record: desktop::FileUndoRecord,
 ) -> Result<(), String> {
     // Current file locations must have originated from a desktop scan/drop.
     match record.kind.as_str() {
-        "move" | "copy" => {
+        "move" | "copy" | "rename" => {
             for destination in &record.destinations {
                 authorizations.resolve(destination)?;
             }
@@ -297,7 +310,7 @@ pub async fn redo_file_operation(
     record: desktop::FileUndoRecord,
 ) -> Result<(), String> {
     match record.kind.as_str() {
-        "move" | "copy" | "delete" => {
+        "move" | "copy" | "delete" | "rename" => {
             for source in &record.sources {
                 authorizations.resolve(source)?;
             }

@@ -105,6 +105,7 @@ pub fn run() {
             bindings::paste_from_clipboard,
             bindings::paste_from_clipboard_with_undo,
             bindings::delete_with_undo,
+            bindings::rename_desktop_icon_with_undo,
             bindings::undo_file_operation,
             bindings::redo_file_operation,
             bindings::export_config,
