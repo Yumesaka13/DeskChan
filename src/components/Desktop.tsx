@@ -371,10 +371,24 @@ export default function Desktop() {
     onMount(() => {
         let dragTimer: ReturnType<typeof setTimeout> | null = null;
 
-        const clearDrag = () => {
+        const clearDragPreview = () => {
             setDragState(null);
-            invoke('set_dragging', { dragging: false }).catch(() => {});
             if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
+        };
+        const clearDrag = () => {
+            clearDragPreview();
+            invoke('set_dragging', { dragging: false }).catch(() => {});
+        };
+
+        const dragPaths = (ds: DragState): string[] => {
+            const groupIds = new Set(
+                (ds.group.length > 0 ? ds.group : [ds.icon]).map((g) => g.id),
+            );
+            const cfg = config();
+            const live = cfg
+                ? allConfigIcons(cfg).filter((icon) => groupIds.has(icon.id))
+                : (ds.group.length > 0 ? ds.group : [ds.icon]);
+            return live.map((icon) => icon.path);
         };
 
         const onMove = (e: PointerEvent) => {
@@ -476,18 +490,39 @@ export default function Desktop() {
             clearDrag();
         };
 
+        const handoffNativeDrag = (e: PointerEvent) => {
+            if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
+            const ds = dragState();
+            if (!ds) return;
+            if (!ds.moved) { clearDrag(); return; }
+
+            suppressNextClick = true;
+            const paths = dragPaths(ds);
+            clearDragPreview();
+            if ((e.buttons & 1) === 0 || paths.length === 0) {
+                invoke('set_dragging', { dragging: false }).catch(() => {});
+                return;
+            }
+            void invoke('start_native_file_drag', { paths })
+                .catch(() => toast.error(t('toast.file_action_failed')))
+                .finally(() => {
+                    invoke('set_dragging', { dragging: false }).catch(() => {});
+                    void reconcileDesktop();
+                });
+        };
+
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onEnd);
-        window.addEventListener('pointerleave', onEnd);
-        window.addEventListener('pointercancel', onEnd);
-        window.addEventListener('lostpointercapture', onEnd);
+        window.addEventListener('pointerleave', handoffNativeDrag);
+        window.addEventListener('pointercancel', handoffNativeDrag);
+        window.addEventListener('lostpointercapture', handoffNativeDrag);
         onCleanup(() => {
             clearDrag();
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onEnd);
-            window.removeEventListener('pointerleave', onEnd);
-            window.removeEventListener('pointercancel', onEnd);
-            window.removeEventListener('lostpointercapture', onEnd);
+            window.removeEventListener('pointerleave', handoffNativeDrag);
+            window.removeEventListener('pointercancel', handoffNativeDrag);
+            window.removeEventListener('lostpointercapture', handoffNativeDrag);
         });
     });
 

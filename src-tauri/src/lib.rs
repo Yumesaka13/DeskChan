@@ -12,6 +12,7 @@ struct NativeDropPayload {
 mod bindings;
 mod config;
 mod desktop;
+mod native_drag;
 mod path_security;
 mod shell_menu;
 #[cfg(target_os = "windows")]
@@ -94,6 +95,7 @@ pub fn run() {
             bindings::get_config,
             bindings::save_config,
             bindings::open_file,
+            bindings::start_native_file_drag,
             bindings::file_action,
             bindings::set_dragging,
             bindings::get_file_icon,
