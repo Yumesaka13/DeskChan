@@ -12,6 +12,7 @@ struct NativeDropPayload {
 mod bindings;
 mod config;
 mod desktop;
+mod native_drag;
 mod path_security;
 mod shell_menu;
 #[cfg(target_os = "windows")]
@@ -94,7 +95,9 @@ pub fn run() {
             bindings::get_config,
             bindings::save_config,
             bindings::open_file,
+            bindings::start_native_file_drag,
             bindings::file_action,
+            bindings::rename_desktop_icon_with_undo,
             bindings::set_dragging,
             bindings::get_file_icon,
             bindings::quit_app,
@@ -111,6 +114,7 @@ pub fn run() {
             bindings::import_config,
             bindings::show_icon_menu,
             bindings::show_desktop_menu,
+            bindings::toggle_show_desktop,
             bindings::open_settings,
         ])
         .run(tauri::generate_context!())

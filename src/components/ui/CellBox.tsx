@@ -15,7 +15,7 @@ import { cn } from '~/lib/utils';
 import { useI18n } from '~/i18n';
 import { CELL_TITLEBAR_H } from '~/lib/grid';
 import { activeIcons, totalIconCount } from '~/lib/cell';
-import { snapPosition } from '~/lib/snap';
+import { snapPosition, snapResizeRect, type ResizeEdges } from '~/lib/snap';
 import { type Cell } from '@bindings/Cell';
 import { type CellRect } from '@bindings/CellRect';
 import { type CellLayout } from '@bindings/CellLayout';
@@ -48,7 +48,11 @@ export interface CellBoxProps {
     selectedIconIds?: ReadonlySet<string>;
     onSelectIcon?: (cellId: string, icon: DesktopIconData, event: MouseEvent) => void;
     onClearIconSelection?: () => void;
+    renamingIconId?: string | null;
+    onRenameIcon?: (icon: DesktopIconData, name: string) => void;
+    onRenameIconCancel?: () => void;
     showFileExtensions?: boolean;
+    showShortcutExtensions?: boolean;
     /** Extra white contrast layer applied only within this cell. */
     desktopOverlayOpacity?: number;
     /** Called to rename the cell (double-click on the title) */
@@ -72,7 +76,7 @@ export interface CellBoxProps {
     hovered?: boolean;
     /** Reports pointer enter/leave; Desktop debounces the leave */
     onHover?: (id: string, inside: boolean) => void;
-    /** Other cells' screen rects - drag-move magnetically snaps to them */
+    /** Other cells' screen rects - move/resize magnetically snaps to them */
     snapRects?: CellRect[];
     /** Called to delete the cell */
     onDelete: (id: string) => void;
@@ -240,7 +244,6 @@ export default function CellBox(props: CellBoxProps) {
     // Live feedback writes styles directly (like drag-move) and the rect is
     // committed once on mouseup - going through the config every mousemove
     // would recreate this component per frame (keyed <For>).
-    interface ResizeDir { n?: boolean; s?: boolean; e?: boolean; w?: boolean }
     const MIN_W = 120;
     const MIN_H = 80;
     // A watcher reconcile can recreate this component mid-gesture - the
@@ -250,7 +253,7 @@ export default function CellBox(props: CellBoxProps) {
     // The curried handler triggers solid/reactivity, but every reactive read
     // happens at event time (rect snapshotted on mousedown, id on mouseup).
     // eslint-disable-next-line solid/reactivity
-    const startResize = (dir: ResizeDir) => (e: MouseEvent) => {
+    const startResize = (dir: ResizeEdges) => (e: MouseEvent) => {
         if (e.button !== 0) return; // right/middle click must never resize
         e.stopPropagation();
         e.preventDefault();
@@ -260,6 +263,7 @@ export default function CellBox(props: CellBoxProps) {
         const startX = e.clientX;
         const startY = e.clientY;
         const r0 = { ...props.cell.rect };
+        const snapRects = props.snapRects ?? [];
         let last = r0;
 
         const onMove = (ev: MouseEvent) => {
@@ -278,7 +282,13 @@ export default function CellBox(props: CellBoxProps) {
                 height = Math.max(MIN_H, Math.min(r0.height - dy, r0.y + r0.height));
                 y = r0.y + (r0.height - height);
             }
-            last = { x, y, width, height };
+            last = snapResizeRect(
+                { x, y, width, height },
+                dir,
+                snapRects,
+                { minWidth: MIN_W, minHeight: MIN_H },
+            );
+            ({ x, y, width, height } = last);
             cellRef.style.left = `${x}px`;
             cellRef.style.top = `${y}px`;
             cellRef.style.width = `${width}px`;
@@ -627,6 +637,7 @@ export default function CellBox(props: CellBoxProps) {
                                     <DesktopIconComponent
                                         icon={icon}
                                         showFileExtensions={props.showFileExtensions}
+                                        showShortcutExtensions={props.showShortcutExtensions}
                                         listLayout={props.cell.layout === 'List'}
                                         class={props.cell.layout === 'List'
                                             ? 'w-full flex-row justify-start gap-2 px-2 py-1'
@@ -635,8 +646,11 @@ export default function CellBox(props: CellBoxProps) {
                                             ? 'flex-1 max-w-none text-left line-clamp-1'
                                             : undefined}
                                         selected={props.selectedIconIds?.has(icon.id) ?? false}
+                                        editing={props.renamingIconId === icon.id}
                                         onSelect={(selected, event) => props.onSelectIcon?.(props.cell.id, selected, event)}
                                         onOpen={props.onOpenIcon}
+                                        onRename={props.onRenameIcon}
+                                        onRenameCancel={props.onRenameIconCancel}
                                         onDragStart={props.onDragStart
                                             ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
                                             : undefined}

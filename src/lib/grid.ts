@@ -132,17 +132,72 @@ export function displayName(path: string, isDir: boolean): string {
  * name with the path stem lets the UI restore an extension for files without
  * mistaking a folder named "archive.zip" for a file.
  */
-export function displayIconName(icon: Pick<DesktopIcon, 'name' | 'path'>, showFileExtensions: boolean): string {
+export function displayIconName(
+    icon: Pick<DesktopIcon, 'name' | 'path'>,
+    showFileExtensions: boolean,
+    showShortcutExtensions = false,
+): string {
     const base = icon.path.split(/[\\/]/).pop() ?? icon.path;
     const stem = base.replace(/(?<=.)\.[^.]+$/, '');
     if (base === stem || icon.name !== stem) return icon.name;
+    if (base.toLowerCase().endsWith('.lnk')) return showShortcutExtensions ? base : stem;
     return showFileExtensions ? base : stem;
 }
 
 /** Parent directory of a path, lowercased (for desktop-ownership checks). */
 function parentDirLower(path: string): string {
-    const low = path.toLowerCase();
+    const low = pathKey(path);
     return low.slice(0, Math.max(low.lastIndexOf('\\'), low.lastIndexOf('/')));
+}
+
+/** Stable Windows path identity for persisted and freshly scanned entries. */
+function pathKey(path: string): string {
+    const lower = path.replace(/\//g, '\\').toLowerCase();
+    const withoutDevicePrefix = lower.startsWith('\\\\?\\unc\\')
+        ? `\\\\${lower.slice(8)}`
+        : lower.startsWith('\\\\?\\')
+            ? lower.slice(4)
+            : lower;
+    return withoutDevicePrefix.replace(/\\+$/, '');
+}
+
+/**
+ * Remove visual duplicates for the same file across the free desktop, cells,
+ * and sub-cells. A file has one desktop representation, so keeping more than
+ * one stale copy lets a rename or watcher event render it twice. When a
+ * caller supplies an ID, retain that icon even if a duplicate appears earlier
+ * in the config; this preserves the location of the icon the user acted on.
+ */
+export function deduplicateConfigIcons(cfg: DeskConfig, preferredIconId?: string): DeskConfig {
+    const winners = new Map<string, DesktopIcon>();
+    const consider = (icon: DesktopIcon) => {
+        const key = pathKey(icon.path);
+        const current = winners.get(key);
+        if (!current || icon.id === preferredIconId) winners.set(key, icon);
+    };
+    cfg.free_icons.forEach(consider);
+    cfg.cells.forEach((cell) => {
+        cell.icons.forEach(consider);
+        cell.sub_cells.forEach((subCell) => subCell.icons.forEach(consider));
+    });
+
+    const keep = (icons: DesktopIcon[]) => icons.filter((icon) => winners.get(pathKey(icon.path)) === icon);
+    const free_icons = keep(cfg.free_icons);
+    const cells = cfg.cells.map((cell) => {
+        const icons = keep(cell.icons);
+        const sub_cells = cell.sub_cells.map((subCell) => {
+            const subIcons = keep(subCell.icons);
+            return subIcons.length === subCell.icons.length ? subCell : { ...subCell, icons: subIcons };
+        });
+        const subCellsChanged = sub_cells.some((subCell, index) => subCell !== cell.sub_cells[index]);
+        return icons.length === cell.icons.length && !subCellsChanged
+            ? cell
+            : { ...cell, icons, sub_cells: subCellsChanged ? sub_cells : cell.sub_cells };
+    });
+    const changed =
+        free_icons.length !== cfg.free_icons.length ||
+        cells.some((cell, index) => cell !== cfg.cells[index]);
+    return changed ? { ...cfg, free_icons, cells } : cfg;
 }
 
 /**
@@ -152,13 +207,21 @@ function parentDirLower(path: string): string {
  * - assign grid slots to every icon carrying the "unplaced" sentinel (pos < 0)
  *
  * Icons pointing outside the desktop dirs (added via dialog) are never
- * auto-removed. Returns the SAME object when nothing changed, so callers can
+ * removed by a scan alone; callers can pass paths explicitly removed by a
+ * native MOVE. Returns the SAME object when nothing changed, so callers can
  * skip re-render / config save.
  */
-export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Size): DeskConfig {
-    const dirs = new Set(scan.dirs.map((d) => d.toLowerCase()));
-    const present = new Set(scan.entries.map((e) => e.path.toLowerCase()));
-    const gone = (p: string) => dirs.has(parentDirLower(p)) && !present.has(p.toLowerCase());
+export function reconcileConfig(
+    cfg: DeskConfig,
+    scan: DesktopScan,
+    viewport: Size,
+    removedPaths: readonly string[] = [],
+): DeskConfig {
+    const dirs = new Set(scan.dirs.map(pathKey));
+    const present = new Set(scan.entries.map((e) => pathKey(e.path)));
+    const explicitlyRemoved = new Set(removedPaths.map(pathKey));
+    const gone = (p: string) => explicitlyRemoved.has(pathKey(p))
+        || (dirs.has(parentDirLower(p)) && !present.has(pathKey(p)));
 
     const freeKept = cfg.free_icons.filter((i) => !gone(i.path));
     // Preserve object identity for untouched cells - Desktop's <For> keys by
@@ -175,15 +238,18 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
         return { ...c, icons, sub_cells: subsChanged ? subs : c.sub_cells };
     });
 
+    const deduplicated = deduplicateConfigIcons({ ...cfg, free_icons: freeKept, cells });
+    const canonicalFree = deduplicated.free_icons;
+    const canonicalCells = deduplicated.cells;
     const known = new Set([
-        ...freeKept.map((i) => i.path.toLowerCase()),
-        ...cells.flatMap((c) => [
-            ...c.icons.map((i) => i.path.toLowerCase()),
-            ...c.sub_cells.flatMap((s) => s.icons.map((i) => i.path.toLowerCase())),
+        ...canonicalFree.map((i) => pathKey(i.path)),
+        ...canonicalCells.flatMap((c) => [
+            ...c.icons.map((i) => pathKey(i.path)),
+            ...c.sub_cells.flatMap((s) => s.icons.map((i) => pathKey(i.path))),
         ]),
     ]);
     const fresh: DesktopIcon[] = scan.entries
-        .filter((e) => !known.has(e.path.toLowerCase()))
+        .filter((e) => !known.has(pathKey(e.path)))
         .map((e) => ({
             id: crypto.randomUUID(),
             name: displayName(e.path, e.is_dir),
@@ -193,13 +259,13 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
             pos_y: -1,
         }));
 
-    let free = [...freeKept, ...fresh];
+    let free = [...canonicalFree, ...fresh];
     const unplaced = free.filter((i) => i.pos_x < 0 || i.pos_y < 0);
     if (unplaced.length > 0) {
         const occupied = free
             .filter((i) => i.pos_x >= 0 && i.pos_y >= 0)
             .map((i) => ({ x: i.pos_x, y: i.pos_y }));
-        const slots = allocateSlots(unplaced.length, occupied, cells.map(effectiveCellRect), viewport);
+        const slots = allocateSlots(unplaced.length, occupied, canonicalCells.map(effectiveCellRect), viewport);
         const slotById = new Map(unplaced.map((icon, n) => [icon.id, slots[n]!]));
         free = free.map((i) => {
             const s = slotById.get(i.id);
@@ -211,8 +277,8 @@ export function reconcileConfig(cfg: DeskConfig, scan: DesktopScan, viewport: Si
         fresh.length > 0 ||
         unplaced.length > 0 ||
         free.length !== cfg.free_icons.length ||
-        cells.some((c, n) => c !== cfg.cells[n]);
-    return changed ? { ...cfg, cells, free_icons: free } : cfg;
+        canonicalCells.some((c, n) => c !== cfg.cells[n]);
+    return changed ? { ...cfg, cells: canonicalCells, free_icons: free } : cfg;
 }
 
 /** Re-lay out ALL free icons compactly in column-major order (auto-arrange). */

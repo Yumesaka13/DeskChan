@@ -7,12 +7,11 @@
 //! raised, we simply follow it up; when apps return, they sit above us.
 //!
 //! Additional mechanisms ensure the window survives Win+D (Show Desktop):
-//! 1. AppBar registration - SHAppBarMessage(ABM_NEW/QUERYPOS/SETPOS) grants
-//!    system-level immunity from Win+D's window enumeration (same as taskbar).
-//! 2. WndProc replacement - intercepts WM_SHOWWINDOW, SC_MINIMIZE,
+//! 1. WndProc replacement - intercepts WM_SHOWWINDOW, SC_MINIMIZE,
 //!    WM_WINDOWPOSCHANGING, and WM_SIZE to block hide/minimize/coordinate
 //!    exile, and answers WM_NCHITTEST with HTCLIENT so the overlay can never
 //!    be user-dragged or user-resized.
+//! 2. The polling loop restores the desktop-relative Z-order after Win+D.
 //!
 //! Desktop icon management: hides the native SysListView32 on startup,
 //! shows it on quit. Files never leave the desktop - we just hide the icons
@@ -92,20 +91,11 @@ mod constants {
     // GetWindow relationships
     pub const GW_HWNDPREV: u32 = 3;
 
-    // SetWindowPos special hwndInsertAfter values
-    pub const HWND_TOP: isize = 0;
-
-    // AppBar
-    pub const ABM_NEW: u32 = 0;
-    pub const ABM_QUERYPOS: u32 = 2;
-    pub const ABM_SETPOS: u32 = 3;
-    pub const ABE_TOP: u32 = 1;
-
     // Coordinate exile threshold (Win+D sends windows to -32000)
     pub const COORDINATE_EXILE_THRESHOLD: i32 = -10000;
 }
 
-// -- Init: AppBar + styles + WndProc replacement ----------------------------
+// -- Init: styles + WndProc replacement -------------------------------------
 
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
@@ -127,25 +117,6 @@ pub fn init(window: &WebviewWindow) {
     extern "system" {
         fn GetWindowLongPtrW(h: isize, i: i32) -> isize;
         fn SetWindowLongPtrW(h: isize, i: i32, v: isize) -> isize;
-        fn SHAppBarMessage(dw: u32, p: *mut AppBarData) -> usize;
-    }
-
-    #[repr(C)]
-    struct Rect {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-    }
-
-    #[repr(C)]
-    struct AppBarData {
-        cbSize: u32,
-        hWnd: isize,
-        uCallbackMessage: u32,
-        uEdge: u32,
-        rc: Rect,
-        lParam: isize,
     }
 
     unsafe {
@@ -169,33 +140,6 @@ pub fn init(window: &WebviewWindow) {
         // here then desyncs that compensation, which showed up as a phantom
         // title-bar band at the top and an outer size larger than requested.
         strip_frame_styles(hwnd);
-
-        // -- AppBar registration --------------------------------------
-        // Register as Application Desktop Toolbar. Windows taskbar uses
-        // the same mechanism. Win+D unconditionally exempts AppBars.
-        // Must call NEW -> QUERYPOS -> SETPOS for valid registration.
-        let mut abd = AppBarData {
-            cbSize: std::mem::size_of::<AppBarData>() as u32,
-            hWnd: hwnd,
-            uCallbackMessage: 0x0401, // WM_USER + 1 - must be non-zero
-            uEdge: ABE_TOP,
-            rc: Rect {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
-            lParam: 0,
-        };
-        SHAppBarMessage(ABM_NEW, &mut abd);
-        abd.rc = Rect {
-            left: 0,
-            top: 0,
-            right: 1920,
-            bottom: 0,
-        };
-        SHAppBarMessage(ABM_QUERYPOS, &mut abd);
-        SHAppBarMessage(ABM_SETPOS, &mut abd);
 
         // -- WndProc replacement --------------------------------------
         // Replace window procedure to intercept hide/minimize messages.
@@ -230,6 +174,29 @@ pub fn show_desktop_icons() {
         unsafe { crate::win32::ShowWindow(list_view, SW_SHOW) };
     }
 }
+
+/// Trigger Windows' native Show Desktop toggle (the same action as Win+D).
+/// Keeping this at the OS level preserves Explorer's normal handling across
+/// all monitors and avoids trying to minimize other applications ourselves.
+#[cfg(target_os = "windows")]
+pub fn toggle_show_desktop() {
+    extern "system" {
+        fn keybd_event(virtual_key: u8, scan_code: u8, flags: u32, extra_info: usize);
+    }
+
+    const VK_LWIN: u8 = 0x5B;
+    const VK_D: u8 = 0x44;
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+    unsafe {
+        keybd_event(VK_LWIN, 0, 0, 0);
+        keybd_event(VK_D, 0, 0, 0);
+        keybd_event(VK_D, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn toggle_show_desktop() {}
 
 /// Find the desktop shell windows as (host, listview):
 /// - host: the top-level Progman or WorkerW that contains SHELLDLL_DefView -
@@ -317,8 +284,10 @@ fn desktop_anchor() -> Option<(isize, Option<isize>)> {
 
 /// Enforce the desktop-glue invariant: our window sits IMMEDIATELY above the
 /// anchor (DefView host) in the Z-order - below every app window, above the
-/// wallpaper and icons. Idempotent and cheap (read-only when already in
-/// place), so it is safe to call every polling tick.
+/// wallpaper and icons. It deliberately refuses to promote the overlay when
+/// Explorer is immediately below the topmost band: that state occurs during
+/// Win+D, and promoting a virtual-desktop-sized window there covers secondary
+/// taskbars that live in the ordinary Z-order band.
 ///
 /// Bug fix: without this, the overlay stayed wherever window creation put it
 /// (on top of every app started earlier) - WS_EX_NOACTIVATE means clicks
@@ -334,24 +303,14 @@ fn pin_above_desktop(our_hwnd: isize, host: isize) {
         if prev == our_hwnd {
             return; // already glued
         }
-        // Inserting after a TOPMOST window would catapult us into the
-        // topmost band (covering every app - the very bug we're fixing).
-        // Happens right after Win+D, when the desktop sits directly under
-        // the topmost band. HWND_TOP only tops the non-topmost band.
-        let insert_after = if prev == 0 || GetWindowLongW(prev, GWL_EXSTYLE) & WS_EX_TOPMOST != 0 {
-            HWND_TOP
-        } else {
-            prev
-        };
-        SetWindowPos(
-            our_hwnd,
-            insert_after,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOSIZE_NOMOVE_NOACTIVATE,
-        );
+        // At this point Windows has promoted the desktop for Show Desktop.
+        // HWND_TOP would move this full-virtual-screen overlay above normal
+        // secondary taskbars. Leave the last valid desktop-relative position
+        // untouched until Explorer restores a normal anchor.
+        if prev == 0 || GetWindowLongW(prev, GWL_EXSTYLE) & WS_EX_TOPMOST != 0 {
+            return;
+        }
+        SetWindowPos(our_hwnd, prev, 0, 0, 0, 0, SWP_NOSIZE_NOMOVE_NOACTIVATE);
     }
 }
 
@@ -430,7 +389,7 @@ unsafe extern "system" fn wndproc(hwnd: isize, msg: u32, wparam: usize, lparam: 
 
 // -- Window sizing ----------------------------------------------------------
 
-/// Position and size the window to cover the complete virtual desktop.
+/// Position and size the window to cover the combined monitor work areas.
 pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -465,24 +424,97 @@ pub fn fit_to_work_area<R: Runtime>(app: &tauri::AppHandle<R>) {
     let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
 }
 
-/// Returns the virtual desktop as (x, y, width, height) in physical pixels.
+/// Returns the union of all monitor work areas as (x, y, width, height) in
+/// physical pixels. Unlike the virtual-screen metrics, monitor work areas
+/// exclude the taskbar on every display. The overlay must not occupy those
+/// strips: after Win+D Explorer can place a secondary taskbar in the normal
+/// Z-order band, where a full-virtual-screen window would cover it.
 #[allow(non_snake_case)]
 fn get_work_area<R: Runtime>(_app: &tauri::AppHandle<R>) -> (f64, f64, f64, f64) {
     #[cfg(target_os = "windows")]
     {
-        extern "system" {
-            fn GetSystemMetrics(index: i32) -> i32;
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct Rect {
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
         }
-        const SM_XVIRTUALSCREEN: i32 = 76;
-        const SM_YVIRTUALSCREEN: i32 = 77;
-        const SM_CXVIRTUALSCREEN: i32 = 78;
-        const SM_CYVIRTUALSCREEN: i32 = 79;
-        let x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-        let y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-        let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-        let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-        if width > 0 && height > 0 {
-            return (x as f64, y as f64, width as f64, height as f64);
+
+        #[repr(C)]
+        struct MonitorInfo {
+            cb_size: u32,
+            rc_monitor: Rect,
+            rc_work: Rect,
+            flags: u32,
+        }
+
+        extern "system" {
+            fn EnumDisplayMonitors(
+                hdc: isize,
+                clip: *const Rect,
+                callback: unsafe extern "system" fn(isize, isize, *mut Rect, isize) -> i32,
+                data: isize,
+            ) -> i32;
+            fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
+        }
+
+        unsafe extern "system" fn collect_work_area(
+            monitor: isize,
+            _: isize,
+            _: *mut Rect,
+            data: isize,
+        ) -> i32 {
+            let work_areas = &mut *(data as *mut Vec<Rect>);
+            let mut info = MonitorInfo {
+                cb_size: std::mem::size_of::<MonitorInfo>() as u32,
+                rc_monitor: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                rc_work: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                flags: 0,
+            };
+            if GetMonitorInfoW(monitor, &mut info) != 0 {
+                work_areas.push(info.rc_work);
+            }
+            1
+        }
+
+        let mut work_areas: Vec<Rect> = Vec::new();
+        unsafe {
+            EnumDisplayMonitors(
+                0,
+                std::ptr::null(),
+                collect_work_area,
+                (&mut work_areas as *mut Vec<Rect>) as isize,
+            );
+        }
+        if let Some(first) = work_areas.first().copied() {
+            let bounds = work_areas.iter().fold(first, |bounds, work| Rect {
+                left: bounds.left.min(work.left),
+                top: bounds.top.min(work.top),
+                right: bounds.right.max(work.right),
+                bottom: bounds.bottom.max(work.bottom),
+            });
+            let width = bounds.right - bounds.left;
+            let height = bounds.bottom - bounds.top;
+            if width > 0 && height > 0 {
+                return (
+                    bounds.left as f64,
+                    bounds.top as f64,
+                    width as f64,
+                    height as f64,
+                );
+            }
         }
     }
     (0.0, 0.0, 1920.0, 1080.0) // fallback

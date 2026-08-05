@@ -148,6 +148,9 @@ pub struct DeskConfig {
     /// Whether file labels include their filename extension.
     #[serde(default = "default_true")]
     pub show_file_extensions: bool,
+    /// Whether shortcut labels include their .lnk extension independently.
+    #[serde(default)]
+    pub show_shortcut_extensions: bool,
     /// Auto-arrange free icons in a grid (true) or allow free placement (false)
     #[serde(default)]
     pub auto_arrange: bool,
@@ -175,6 +178,7 @@ impl Default for DeskConfig {
             excluded_from_organize: Vec::new(),
             use_styled_file_menu: true,
             show_file_extensions: true,
+            show_shortcut_extensions: false,
             auto_arrange: true,
             snap_to_grid: true,
             theme: "auto".to_string(),

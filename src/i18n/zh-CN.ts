@@ -25,6 +25,8 @@ export interface Translations {
     'icon.exclude_organize': string;
     'icon.cut': string;
     'icon.copy': string;
+    'icon.rename': string;
+    'icon.rename_prompt': string;
     'icon.delete': string;
     'icon.properties': string;
     'icon.system_menu': string;
@@ -51,6 +53,7 @@ export interface Translations {
     'desktop.context.personalize': string;
     'desktop.context.display_settings': string;
     'desktop.context.system_menu': string;
+    'desktop.context.show_desktop': string;
     'desktop.context.exit': string;
 
     // Organize categories (cell titles)
@@ -66,6 +69,7 @@ export interface Translations {
     'toast.load_config_failed': string;
     'toast.open_file_failed': string;
     'toast.file_action_failed': string;
+    'toast.rename_failed': string;
     'toast.open_settings_failed': string;
     'toast.drop_failed': string;
     'toast.paste_failed': string;
@@ -76,6 +80,8 @@ export interface Translations {
     'toast.export_failed': string;
     'toast.import_done': string;
     'toast.import_failed': string;
+    'confirm.delete_one': string;
+    'confirm.delete_many': string;
 
     // History
     'history.title': string;
@@ -89,6 +95,7 @@ export interface Translations {
     'history.file_move': string;
     'history.file_copy': string;
     'history.file_delete': string;
+    'history.file_rename': string;
 
     // Defaults
     'default.cell_title': string;
@@ -102,6 +109,7 @@ export interface Translations {
     'settings.file_extensions': string;
     'settings.file_extensions_show': string;
     'settings.file_extensions_hide': string;
+    'settings.shortcut_extensions': string;
     'settings.file_menu_styled': string;
     'settings.file_menu_native': string;
     'settings.language': string;
@@ -147,6 +155,8 @@ export const zhCN: Translations = {
     'icon.exclude_organize': '\u4e0d\u53c2\u4e0e\u4e00\u952e\u6574\u7406',
     'icon.cut': '\u526a\u5207',
     'icon.copy': '\u590d\u5236',
+    'icon.rename': '\u91cd\u547d\u540d',
+    'icon.rename_prompt': '\u8f93\u5165\u65b0\u540d\u79f0',
     'icon.delete': '\u5220\u9664',
     'icon.properties': '\u5c5e\u6027',
     'icon.system_menu': '\u66f4\u591a\u7cfb\u7edf\u9009\u9879',
@@ -172,6 +182,7 @@ export const zhCN: Translations = {
     'desktop.context.personalize': '\u4E2A\u6027\u5316',
     'desktop.context.display_settings': '\u663E\u793A\u8BBE\u7F6E',
     'desktop.context.system_menu': '\u66F4\u591A\u7CFB\u7EDF\u9009\u9879',
+    'desktop.context.show_desktop': '\u663E\u793A\u684C\u9762',
     'desktop.context.exit': '\u9000\u51FA DeskChan',
 
     'organize.folders': '\u6587\u4EF6\u5939',
@@ -185,6 +196,7 @@ export const zhCN: Translations = {
     'toast.load_config_failed': '\u52A0\u8F7D\u914D\u7F6E\u5931\u8D25',
     'toast.open_file_failed': '\u6253\u5F00\u6587\u4EF6\u5931\u8D25',
     'toast.file_action_failed': '\u6587\u4ef6\u64cd\u4f5c\u5931\u8d25',
+    'toast.rename_failed': '\u91CD\u547D\u540D\u5931\u8D25',
     'toast.open_settings_failed': '\u65E0\u6CD5\u6253\u5F00\u7CFB\u7EDF\u8BBE\u7F6E',
     'toast.drop_failed': '\u65E0\u6CD5\u63A5\u6536\u62D6\u5165\u7684\u6587\u4EF6',
     'toast.paste_failed': '\u65e0\u6cd5\u7c98\u8d34\u526a\u8d34\u677f\u4e2d\u7684\u6587\u4ef6',
@@ -195,6 +207,8 @@ export const zhCN: Translations = {
     'toast.export_failed': '\u5BFC\u51FA\u5931\u8D25',
     'toast.import_done': '\u914D\u7F6E\u5DF2\u5BFC\u5165',
     'toast.import_failed': '\u5BFC\u5165\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6587\u4EF6\u662F\u5426\u6709\u6548',
+    'confirm.delete_one': '\u786e\u5b9a\u8981\u5c06\u6b64\u9879\u79fb\u5165\u56de\u6536\u7ad9\u5417\uff1f',
+    'confirm.delete_many': '\u786e\u5b9a\u8981\u5c06\u9009\u4e2d\u9879\u79fb\u5165\u56de\u6536\u7ad9\u5417\uff1f',
 
     'history.title': '\u64CD\u4F5C\u5386\u53F2',
     'history.empty': '\u6682\u65E0\u53EF\u64A4\u9500\u7684\u64CD\u4F5C',
@@ -207,6 +221,7 @@ export const zhCN: Translations = {
     'history.file_move': '\u79FB\u52A8\u6587\u4EF6',
     'history.file_copy': '\u590D\u5236\u6587\u4EF6',
     'history.file_delete': '\u79FB\u5165\u56DE\u6536\u7AD9',
+    'history.file_rename': '\u91CD\u547D\u540D\u6587\u4EF6',
 
     'default.cell_title': '\u683C\u5B50',
     'default.sub_title': '\u5B50\u76D2\u5B50',
@@ -218,6 +233,7 @@ export const zhCN: Translations = {
     'settings.file_extensions': '\u663e\u793a\u6587\u4ef6\u6269\u5c55\u540d',
     'settings.file_extensions_show': '\u663e\u793a',
     'settings.file_extensions_hide': '\u9690\u85cf',
+    'settings.shortcut_extensions': '\u663e\u793a .lnk \u5feb\u6377\u65b9\u5f0f\u6269\u5c55\u540d',
     'settings.file_menu_styled': '\u7f8e\u5316\u83dc\u5355',
     'settings.file_menu_native': '\u539f\u7248\u83dc\u5355',
     'settings.language': '\u8BED\u8A00',

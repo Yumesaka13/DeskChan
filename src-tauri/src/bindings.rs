@@ -40,6 +40,25 @@ pub async fn open_file(
     tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn start_native_file_drag(
+    state: tauri::State<'_, Arc<DeskState>>,
+    authorizations: tauri::State<'_, PathAuthorizations>,
+    paths: Vec<String>,
+) -> Result<u32, String> {
+    if paths.is_empty() || paths.len() > 64 {
+        return Err("invalid file selection".into());
+    }
+    let paths = paths
+        .iter()
+        .map(|path| authorizations.resolve(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    state.dragging.store(true, Ordering::Relaxed);
+    let result = crate::native_drag::drag_files(paths);
+    state.dragging.store(false, Ordering::Relaxed);
+    result
+}
+
 /// Explorer-like operations used by the styled file menu. Paths are resolved
 /// through the same authorization registry as open/drop operations.
 #[tauri::command]
@@ -89,6 +108,19 @@ pub async fn file_action(
         let _ = (paths, action);
         Err("file actions are only supported on Windows".into())
     }
+}
+
+#[tauri::command]
+pub async fn rename_desktop_icon_with_undo(
+    authorizations: tauri::State<'_, PathAuthorizations>,
+    path: String,
+    name: String,
+    preserve_extension: bool,
+) -> Result<desktop::RenamedIconMutation, String> {
+    let source = authorizations.resolve(&path)?;
+    let mutation = desktop::rename_with_undo(&source, &name, preserve_extension)?;
+    authorizations.authorize([PathBuf::from(&mutation.path)]);
+    Ok(mutation)
 }
 
 #[tauri::command]
@@ -274,7 +306,7 @@ pub async fn undo_file_operation(
 ) -> Result<(), String> {
     // Current file locations must have originated from a desktop scan/drop.
     match record.kind.as_str() {
-        "move" | "copy" => {
+        "move" | "rename" | "copy" => {
             for destination in &record.destinations {
                 authorizations.resolve(destination)?;
             }
@@ -297,7 +329,7 @@ pub async fn redo_file_operation(
     record: desktop::FileUndoRecord,
 ) -> Result<(), String> {
     match record.kind.as_str() {
-        "move" | "copy" | "delete" => {
+        "move" | "rename" | "copy" | "delete" => {
             for source in &record.sources {
                 authorizations.resolve(source)?;
             }
@@ -350,4 +382,10 @@ pub async fn show_desktop_menu(
         .native_desktop_menu_open
         .store(false, Ordering::Relaxed);
     result
+}
+
+#[tauri::command]
+pub fn toggle_show_desktop() -> Result<(), String> {
+    crate::window_manager::toggle_show_desktop();
+    Ok(())
 }
