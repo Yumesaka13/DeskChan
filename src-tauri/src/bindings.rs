@@ -1,4 +1,4 @@
-﻿use crate::config::{self, DeskConfig, DesktopEntry, DesktopScan};
+use crate::config::{self, DeskConfig, DesktopEntry, DesktopScan};
 use crate::desktop;
 use crate::path_security::{self, PathAuthorizations};
 use crate::window_manager::DeskState;

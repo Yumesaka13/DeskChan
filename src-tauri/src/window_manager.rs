@@ -1,4 +1,4 @@
-﻿//! DeskChan window manager.
+//! DeskChan window manager.
 //!
 //! The overlay is "glued to the desktop" via a Z-order invariant: our window
 //! must sit IMMEDIATELY above the SHELLDLL_DefView host (Progman/WorkerW) -

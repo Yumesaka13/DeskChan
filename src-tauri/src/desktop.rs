@@ -309,7 +309,7 @@ fn remove_entry(path: &Path) -> Result<(), String> {
 }
 
 fn move_exact(source: &Path, destination: &Path) -> Result<(), String> {
-    if destination.exists() && !same_filename_on_windows(source, destination) {
+    if destination.exists() {
         return Err("undo target already exists".into());
     }
     match std::fs::rename(source, destination) {

@@ -1,4 +1,4 @@
-﻿import type { Translations } from './zh-CN';
+import type { Translations } from './zh-CN';
 
 export const enUS: Translations = {
     'app.name': 'DeskChan Desktop Box',
@@ -20,11 +20,11 @@ export const enUS: Translations = {
     'icon.remove': 'Remove Icon',
     'icon.open_file': 'Open File',
     'icon.open_with': 'Open With...',
+    'icon.rename': 'Rename',
     'icon.exclude_organize': 'Exclude from Auto-Organize',
     'icon.cut': 'Cut',
     'icon.copy': 'Copy',
-    'icon.rename': 'Rename',
-    'icon.rename_prompt': 'Enter a new name',
+
     'icon.delete': 'Delete',
     'icon.properties': 'Properties',
     'icon.system_menu': 'More System Options',
@@ -65,7 +65,7 @@ export const enUS: Translations = {
     'toast.scan_failed': 'Failed to scan the desktop - use the desktop right-click menu to refresh',
     'toast.open_file_failed': 'Failed to open file',
     'toast.file_action_failed': 'File operation failed',
-    'toast.rename_failed': 'Failed to rename',
+    'toast.rename_failed': 'Rename failed',
     'toast.open_settings_failed': 'Failed to open system settings',
     'toast.drop_failed': 'Failed to receive dropped files',
     'toast.paste_failed': 'Failed to paste clipboard files',

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Desktop main application surface.
  * Manages cells, free icons on a Windows-like grid, drag-and-drop,
  * right-click menu, config persistence, and reconciles the icon list with

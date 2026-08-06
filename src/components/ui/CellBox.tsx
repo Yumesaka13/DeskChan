@@ -1,4 +1,4 @@
-﻿/**
+/**
  * CellBox - a draggable, resizable desktop cell (fence/box) that holds icons.
  * Drag the cell by its title bar or empty area; resize from any edge/corner.
  * Drop external icons onto the cell to add them (to the active tab).
