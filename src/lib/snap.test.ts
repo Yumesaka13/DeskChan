@@ -74,19 +74,19 @@ describe('snapResizeRect', () => {
         )).toEqual({ x: 294, y: 20, width: 56, height: 70 });
     });
 
-    it('ignores edges whose rectangles do not overlap on the other axis', () => {
+    it('snaps to nearby edges even when the rectangles do not overlap on the other axis', () => {
         expect(snapResizeRect(
             { x: 10, y: 20, width: 86, height: 70 },
             { e: true },
             [{ x: 100, y: 200, width: 200, height: 100 }],
             { minWidth: 50, minHeight: 50 },
-        )).toEqual({ x: 10, y: 20, width: 86, height: 70 });
+        )).toEqual({ x: 10, y: 20, width: 90, height: 70 });
 
         expect(snapResizeRect(
             { x: 10, y: 20, width: 80, height: 86 },
             { s: true },
             [{ x: 200, y: 100, width: 100, height: 200 }],
             { minWidth: 50, minHeight: 50 },
-        )).toEqual({ x: 10, y: 20, width: 80, height: 86 });
+        )).toEqual({ x: 10, y: 20, width: 80, height: 80 });
     });
 });
