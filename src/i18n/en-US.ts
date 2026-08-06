@@ -78,6 +78,8 @@ export const enUS: Translations = {
     'toast.import_failed': 'Import failed - is the file valid?',
     'confirm.delete_one': 'Move this item to the Recycle Bin?',
     'confirm.delete_many': 'Move the selected items to the Recycle Bin?',
+    'confirm.permanent_delete_one': 'Permanently delete this item?',
+    'confirm.permanent_delete_many': 'Permanently delete the selected items?',
 
     'history.title': 'History',
     'history.empty': 'No actions to undo',
@@ -90,6 +92,7 @@ export const enUS: Translations = {
     'history.file_move': 'Move files',
     'history.file_copy': 'Copy files',
     'history.file_delete': 'Move to Recycle Bin',
+    'history.file_delete_permanent': 'Delete file permanently',
     'history.file_rename': 'Rename file',
     'history.reposition': 'Reposition icons',
     'history.import': 'Import configuration',

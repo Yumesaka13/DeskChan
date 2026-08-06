@@ -427,7 +427,7 @@ export default function Desktop() {
                 const paths = selectedPaths();
                 if (paths.length > 0) {
                     e.preventDefault();
-                    void deletePaths(paths).then((deleted) => {
+                    void deletePaths(paths, e.shiftKey).then((deleted) => {
                         if (deleted) setSelectedIds(new Set<string>());
                     });
                 }
@@ -1135,12 +1135,19 @@ export default function Desktop() {
         }
     };
 
-    const deletePaths = async (paths: string[]): Promise<boolean> => {
+    const deletePaths = async (paths: string[], permanent = false): Promise<boolean> => {
         if (paths.length === 0) return false;
-        const message = paths.length === 1 ? t('confirm.delete_one') : t('confirm.delete_many');
-        if (!(await ask(message, { kind: 'warning' }))) return false;
+        if (!permanent) {
+            const message = paths.length === 1
+                ? t('confirm.delete_one')
+                : t('confirm.delete_many');
+            if (!(await ask(message, { kind: 'warning' }))) return false;
+        }
         try {
-            const mutation = await invoke<FileMutation>('delete_with_undo', { paths });
+            const mutation = await invoke<FileMutation>(
+                permanent ? 'delete_permanently_with_undo' : 'delete_with_undo',
+                { paths },
+            );
             // The confirmation dialog can stay open for a long time; watcher
             // reconciles that happened meanwhile must not be rolled back by
             // applying a stale snapshot.
@@ -1158,7 +1165,8 @@ export default function Desktop() {
             };
             setConfig(after);
             pushHistoryEntry({
-                id: crypto.randomUUID(), label: t('history.file_delete'),
+                id: crypto.randomUUID(),
+                label: permanent ? t('history.file_delete_permanent') : t('history.file_delete'),
                 before: cloneConfig(before), after: cloneConfig(after), file: mutation.record,
             });
             return true;

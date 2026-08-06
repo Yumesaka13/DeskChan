@@ -170,6 +170,7 @@ pub fn run() {
             bindings::paste_from_clipboard,
             bindings::paste_from_clipboard_with_undo,
             bindings::delete_with_undo,
+            bindings::delete_permanently_with_undo,
             bindings::undo_file_operation,
             bindings::redo_file_operation,
             bindings::discard_undo_backups,
