@@ -17,6 +17,7 @@ import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
 import { arrangeFreeIcons, deduplicateConfigIcons, displayIconName, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid, sortFreeIcons, type SortDirection, type SortField } from '~/lib/grid';
 import { HISTORY_LIMIT, popRedo, popUndo, pushHistory, type HistoryState } from '~/lib/history';
 import { allIcons, deleteSubCell, removeIcon, reorderIcons, withActiveIcons } from '~/lib/cell';
+import { toggleDesktopContentVisibility } from '~/lib/desktop-visibility';
 import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
 import { getCachedIcon } from '~/lib/icon-cache';
@@ -33,6 +34,7 @@ export default function Desktop() {
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [settingsOpen, setSettingsOpen] = createSignal(false);
     const [settingsAnchor, setSettingsAnchor] = createSignal<{ x: number; y: number } | null>(null);
+    const [contentVisible, setContentVisible] = createSignal(true);
 
     const openSettingsDialog = async () => {
         const click = contextMenu();
@@ -278,6 +280,11 @@ export default function Desktop() {
         window.addEventListener('pointerup', up);
         window.addEventListener('pointerleave', finish);
         window.addEventListener('lostpointercapture', finish);
+    };
+
+    const handleDesktopDoubleClick = (e: MouseEvent) => {
+        if (e.target !== e.currentTarget) return;
+        setContentVisible((visible) => toggleDesktopContentVisibility(visible));
     };
 
     // Hover-expand state lives here (not in CellBox) so it survives cell
@@ -1214,15 +1221,17 @@ export default function Desktop() {
             // never tinted. Contrast is applied by each CellBox instead.
             style={{ "background-color": 'transparent' }}
             onPointerDown={handleDesktopPointerDown}
+            onDblClick={handleDesktopDoubleClick}
             onContextMenu={(e) => {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY });
             }}
         >
-            {/* Cells - <For> with key prevents destroying/recreating components on config change */}
-            <For each={config()?.cells ?? []}>
-                {(cell) => (
-                    <CellBox
+            <Show when={contentVisible()}>
+                {/* Cells - <For> with key prevents destroying/recreating components on config change */}
+                <For each={config()?.cells ?? []}>
+                    {(cell) => (
+                        <CellBox
                         cell={cell}
                         onMove={(id, x, y) =>
                             updateCell(id, (c) => ({ ...c, rect: { ...c.rect, x, y } }))
@@ -1296,15 +1305,15 @@ export default function Desktop() {
                             .filter((c) => c.id !== cell.id)
                             .map(effectiveCellRect)}
                     />
-                )}
-            </For>
+                    )}
+                </For>
 
-            {/* Free icons - Windows-like fixed grid slots, absolute positions.
-                No remove button: like the native desktop, a free icon exists
-                exactly as long as its file does (the watcher enforces this). */}
-            <For each={config()?.free_icons ?? []}>
-                {(icon) => (
-                    <div
+                {/* Free icons - Windows-like fixed grid slots, absolute positions.
+                    No remove button: like the native desktop, a free icon exists
+                    exactly as long as its file does (the watcher enforces this). */}
+                <For each={config()?.free_icons ?? []}>
+                    {(icon) => (
+                        <div
                         data-icon
                         data-icon-id={icon.id}
                         class={selectedIds().has(icon.id) ? 'absolute z-30' : 'absolute z-0'}
@@ -1351,12 +1360,13 @@ export default function Desktop() {
                                 invoke('set_dragging', { dragging: true }).catch(() => {});
                             }}
                         />
-                    </div>
-                )}
-            </For>
+                        </div>
+                    )}
+                </For>
+            </Show>
 
             {/* Empty state */}
-            {config() && config()!.cells.length === 0 && config()!.free_icons.length === 0 && (
+            {contentVisible() && config() && config()!.cells.length === 0 && config()!.free_icons.length === 0 && (
                 <div class="flex items-center justify-center h-full">
                     <p class="text-gray-400 dark:text-gray-500 text-sm italic">
                         {t('desktop.empty')}
