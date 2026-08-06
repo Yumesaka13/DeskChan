@@ -82,6 +82,8 @@ export interface Translations {
     'toast.import_failed': string;
     'confirm.delete_one': string;
     'confirm.delete_many': string;
+    'confirm.permanent_delete_one': string;
+    'confirm.permanent_delete_many': string;
 
     // History
     'history.title': string;
@@ -95,6 +97,7 @@ export interface Translations {
     'history.file_move': string;
     'history.file_copy': string;
     'history.file_delete': string;
+    'history.file_delete_permanent': string;
     'history.file_rename': string;
     'history.reposition': string;
     'history.import': string;
@@ -212,6 +215,8 @@ export const zhCN: Translations = {
     'toast.import_failed': '导入失败，请检查文件是否有效',
     'confirm.delete_one': '确定要将此项移入回收站吗？',
     'confirm.delete_many': '确定要将选中项移入回收站吗？',
+    'confirm.permanent_delete_one': '确定要永久删除此项吗？',
+    'confirm.permanent_delete_many': '确定要永久删除选中项吗？',
 
     'history.title': '操作历史',
     'history.empty': '暂无可撤销的操作',
@@ -224,6 +229,7 @@ export const zhCN: Translations = {
     'history.file_move': '移动文件',
     'history.file_copy': '复制文件',
     'history.file_delete': '移入回收站',
+    'history.file_delete_permanent': '永久删除文件',
     'history.file_rename': '重命名文件',
     'history.reposition': '重排图标',
     'history.import': '导入配置',

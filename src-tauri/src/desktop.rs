@@ -537,6 +537,90 @@ pub fn delete_with_undo(paths: &[PathBuf], backup_root: &Path) -> Result<FileMut
     })
 }
 
+pub fn delete_permanently_with_undo(paths: &[PathBuf], backup_root: &Path) -> Result<FileMutation, String> {
+    if paths.is_empty() {
+        return Err("no files to delete".into());
+    }
+    std::fs::create_dir_all(backup_root).map_err(|e| e.to_string())?;
+    let mut backups = Vec::with_capacity(paths.len());
+    for (index, path) in paths.iter().enumerate() {
+        let backup = backup_root.join(index.to_string());
+        if let Err(error) = copy_entry(path, &backup) {
+            let _ = std::fs::remove_dir_all(backup_root);
+            return Err(error);
+        }
+        backups.push(backup.to_string_lossy().to_string());
+    }
+    if let Err(error) = delete_paths(paths) {
+        let _ = std::fs::remove_dir_all(backup_root);
+        return Err(error);
+    }
+    Ok(FileMutation {
+        paths: vec![],
+        record: FileUndoRecord {
+            kind: "delete_permanent".into(),
+            sources: paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect(),
+            destinations: vec![],
+            backups,
+        },
+    })
+}
+
+fn delete_paths(paths: &[PathBuf]) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+
+        const FO_DELETE: u32 = 3;
+        #[repr(C)]
+        struct ShFileOp {
+            hwnd: isize,
+            func: u32,
+            from: *const u16,
+            to: *const u16,
+            flags: u16,
+            aborted: i32,
+            mappings: *mut c_void,
+            progress_title: *const u16,
+        }
+        extern "system" {
+            fn SHFileOperationW(operation: *mut ShFileOp) -> i32;
+        }
+
+        let mut from = Vec::new();
+        for path in paths {
+            from.extend(path.as_os_str().to_string_lossy().encode_utf16());
+            from.push(0);
+        }
+        from.push(0);
+        let mut operation = ShFileOp {
+            hwnd: 0,
+            func: FO_DELETE,
+            from: from.as_ptr(),
+            to: std::ptr::null(),
+            flags: 0,
+            aborted: 0,
+            mappings: std::ptr::null_mut(),
+            progress_title: std::ptr::null(),
+        };
+        let result = unsafe { SHFileOperationW(&mut operation) };
+        if result != 0 || operation.aborted != 0 {
+            return Err("delete operation was cancelled or failed".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        for path in paths {
+            remove_entry(path)?;
+        }
+        Ok(())
+    }
+}
+
 pub fn undo_file_operation(record: &FileUndoRecord) -> Result<(), String> {
     match record.kind.as_str() {
         "move" | "rename" => {
@@ -549,7 +633,7 @@ pub fn undo_file_operation(record: &FileUndoRecord) -> Result<(), String> {
                 remove_entry(Path::new(destination))?;
             }
         }
-        "delete" => {
+        "delete" | "delete_permanent" => {
             for (source, backup) in record.sources.iter().zip(&record.backups) {
                 let source = Path::new(source);
                 if source.exists() {
@@ -576,6 +660,11 @@ pub fn redo_file_operation(record: &FileUndoRecord) -> Result<(), String> {
             }
         }
         "delete" => recycle_paths(&record.sources.iter().map(PathBuf::from).collect::<Vec<_>>())?,
+        "delete_permanent" => {
+            for source in &record.sources {
+                remove_entry(Path::new(source))?;
+            }
+        }
         _ => return Err("unsupported history operation".into()),
     }
     Ok(())

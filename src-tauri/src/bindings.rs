@@ -335,6 +335,28 @@ pub async fn delete_with_undo(
 }
 
 #[tauri::command]
+pub async fn delete_permanently_with_undo(
+    app: tauri::AppHandle,
+    authorizations: tauri::State<'_, PathAuthorizations>,
+    paths: Vec<String>,
+) -> Result<desktop::FileMutation, String> {
+    if paths.is_empty() || paths.len() > 64 {
+        return Err("invalid file selection".into());
+    }
+    let paths = paths
+        .iter()
+        .map(|path| authorizations.resolve(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let backup = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("undo")
+        .join(uuid::Uuid::new_v4().to_string());
+    desktop::delete_permanently_with_undo(&paths, &backup)
+}
+
+#[tauri::command]
 pub async fn undo_file_operation(
     authorizations: tauri::State<'_, PathAuthorizations>,
     record: desktop::FileUndoRecord,
