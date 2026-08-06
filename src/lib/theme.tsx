@@ -3,6 +3,7 @@ import {
     useContext,
     createSignal,
     createEffect,
+    onCleanup,
     type ParentProps,
     type Accessor,
 } from 'solid-js';
@@ -31,27 +32,28 @@ export function ThemeProvider(props: ParentProps) {
     // Apply theme class to <html>
     createEffect(() => {
         const t = theme();
-        let resolved: 'light' | 'dark';
+        const apply = (resolved: 'light' | 'dark') => {
+            setResolvedTheme(resolved);
+            document.documentElement.classList.toggle('dark', resolved === 'dark');
+            localStorage.setItem('deskchan-theme', t);
+        };
 
         if (t === 'auto') {
-            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light';
-            // Listen to system theme changes when in auto mode
+            // Listen to system theme changes while in auto mode. The class
+            // toggle must happen HERE (inside the media-query handler), not
+            // in the effect body: this effect only re-runs when `theme()`
+            // changes, so a system light/dark switch used to update the
+            // (unconsumed) signal but never repaint the app.
             const mq = window.matchMedia('(prefers-color-scheme: dark)');
             const handler = (e: MediaQueryListEvent) => {
-                setResolvedTheme(e.matches ? 'dark' : 'light');
+                apply(e.matches ? 'dark' : 'light');
             };
             mq.addEventListener('change', handler);
-            // Cleanup not needed in Solid's createEffect - but we use a simple approach;
-            // the listener will persist for the lifetime of the app.
+            onCleanup(() => mq.removeEventListener('change', handler));
+            apply(mq.matches ? 'dark' : 'light');
         } else {
-            resolved = t;
+            apply(t);
         }
-
-        setResolvedTheme(resolved);
-        document.documentElement.classList.toggle('dark', resolved === 'dark');
-        localStorage.setItem('deskchan-theme', t);
     });
 
     const value: ThemeContextValue = { theme, setTheme, resolvedTheme };

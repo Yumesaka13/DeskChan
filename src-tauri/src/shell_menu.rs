@@ -390,6 +390,19 @@ mod menu_ffi {
         if paths.is_empty() {
             return Err("no paths".into());
         }
+        // Same-parent invariant, exactly like show(): the user desktop and
+        // the public desktop (C:\Users\Public\Desktop) are rendered merged,
+        // but a child PIDL handed to the WRONG parent folder makes the shell
+        // resolve names against it - possibly a real, different file.
+        let parent = |p: &str| {
+            std::path::Path::new(p)
+                .parent()
+                .map(|d| d.to_string_lossy().to_lowercase())
+        };
+        let first_parent = parent(&paths[0]);
+        if paths.iter().any(|p| parent(p) != first_parent) {
+            return Err("paths must share one parent folder".into());
+        }
         let _com = ComGuard::init();
         struct PidlFree(*mut c_void);
         impl Drop for PidlFree {

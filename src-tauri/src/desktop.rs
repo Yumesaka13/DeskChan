@@ -254,6 +254,11 @@ fn desktop_destination(source: &Path, allow_same_path: bool) -> Result<PathBuf, 
     std::fs::create_dir_all(&desktop).map_err(|e| e.to_string())?;
     let filename = source.file_name().ok_or("invalid source")?;
     let direct = desktop.join(filename);
+    #[cfg(target_os = "windows")]
+    if allow_same_path && same_path_on_windows(source, &direct) {
+        return Ok(direct);
+    }
+    #[cfg(not(target_os = "windows"))]
     if allow_same_path && source == direct {
         return Ok(direct);
     }
@@ -346,6 +351,17 @@ fn same_filename_on_windows(left: &Path, right: &Path) -> bool {
                         .eq_ignore_ascii_case(&right.to_string_lossy())
                 })
     }
+}
+
+/// Whole-path case-insensitive equality for Windows (the filesystem is
+/// case-insensitive, but `PathBuf::eq` compares code units exactly). Without
+/// this, moving a file that is already on the desktop with a differently
+/// cased spelling (e.g. `C:\Users\me\desktop\a.txt`) was treated as a
+/// different file and duplicated as "a (1).txt".
+#[cfg(target_os = "windows")]
+fn same_path_on_windows(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
 }
 
 pub fn rename_with_undo(
@@ -493,10 +509,20 @@ pub fn delete_with_undo(paths: &[PathBuf], backup_root: &Path) -> Result<FileMut
     let mut backups = Vec::with_capacity(paths.len());
     for (index, path) in paths.iter().enumerate() {
         let backup = backup_root.join(index.to_string());
-        copy_entry(path, &backup)?;
+        if let Err(error) = copy_entry(path, &backup) {
+            // A partial backup tree is unreachable garbage - no history entry
+            // is created for a failed delete, so nothing would ever clean it.
+            let _ = std::fs::remove_dir_all(backup_root);
+            return Err(error);
+        }
         backups.push(backup.to_string_lossy().to_string());
     }
-    recycle_paths(paths)?;
+    if let Err(error) = recycle_paths(paths) {
+        // Recycle cancelled/failed (the file still exists): the copy made
+        // above is already redundant, remove it instead of leaking it.
+        let _ = std::fs::remove_dir_all(backup_root);
+        return Err(error);
+    }
     Ok(FileMutation {
         paths: vec![],
         record: FileUndoRecord {
@@ -807,4 +833,26 @@ pub fn start_watcher(app: tauri::AppHandle) {
             let _ = app.emit("desktop-changed", ());
         }
     });
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn same_path_on_windows_is_case_insensitive() {
+        assert!(same_path_on_windows(
+            Path::new(r"C:\Users\Me\desktop\a.txt"),
+            Path::new(r"C:\Users\Me\Desktop\A.TXT"),
+        ));
+        assert!(!same_path_on_windows(
+            Path::new(r"C:\Users\Me\Desktop\a.txt"),
+            Path::new(r"D:\Users\Me\Desktop\a.txt"),
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn same_path_on_windows_compiles_elsewhere() {}
 }

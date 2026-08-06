@@ -33,6 +33,7 @@ function cfg(partial?: Partial<DeskConfig>): DeskConfig {
         ...partial,
         use_styled_file_menu: partial?.use_styled_file_menu ?? true,
         show_file_extensions: partial?.show_file_extensions ?? true,
+        show_shortcut_extensions: partial?.show_shortcut_extensions ?? false,
         excluded_from_organize: partial?.excluded_from_organize ?? [],
         desktop_overlay_opacity: partial?.desktop_overlay_opacity ?? 0.01,
     };

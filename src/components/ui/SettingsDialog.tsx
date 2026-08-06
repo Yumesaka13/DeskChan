@@ -28,6 +28,8 @@ export interface SettingsDialogProps {
     onUseStyledFileMenuChange: (value: boolean) => void;
     showFileExtensions: boolean;
     onShowFileExtensionsChange: (value: boolean) => void;
+    showShortcutExtensions: boolean;
+    onShowShortcutExtensionsChange: (value: boolean) => void;
     /** Point where the settings command was opened (virtual-desktop CSS px). */
     anchor?: { x: number; y: number } | null;
     /** Override class for the overlay */
@@ -160,6 +162,15 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                                         label={lang === 'zh-CN' ? '\u4E2D\u6587' : 'English'}
                                     />
                                 ))}
+                            </div>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-sm font-medium text-gray-600 dark:text-gray-300">
+                                {t('settings.shortcut_extensions')}
+                            </label>
+                            <div class="flex gap-2">
+                                <OptionButton active={props.showShortcutExtensions} onClick={() => props.onShowShortcutExtensionsChange(true)} label={t('settings.file_extensions_show')} />
+                                <OptionButton active={!props.showShortcutExtensions} onClick={() => props.onShowShortcutExtensionsChange(false)} label={t('settings.file_extensions_hide')} />
                             </div>
                         </div>
                     </Tabs.Content>
