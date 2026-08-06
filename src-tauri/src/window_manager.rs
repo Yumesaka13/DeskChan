@@ -1,4 +1,4 @@
-//! DeskChan window manager.
+﻿//! DeskChan window manager.
 //!
 //! The overlay is "glued to the desktop" via a Z-order invariant: our window
 //! must sit IMMEDIATELY above the SHELLDLL_DefView host (Progman/WorkerW) -
@@ -91,8 +91,13 @@ mod constants {
     // GetWindow relationships
     pub const GW_HWNDPREV: u32 = 3;
 
-    // Coordinate exile threshold (Win+D sends windows to -32000)
-    pub const COORDINATE_EXILE_THRESHOLD: i32 = -10000;
+    // Coordinate exile (Win+D sends windows to -32000). The threshold must
+    // stay far below any legitimate monitor layout - displays positioned
+    // left/above the primary have negative coordinates, and a blanket
+    // -10000 cutoff used to break two 5120px ultrawides or similar setups
+    // by blocking the app's own work-area moves (and caching the failure
+    // forever in the polling loop).
+    pub const COORDINATE_EXILE_THRESHOLD: i32 = -30000;
 }
 
 // -- Init: styles + WndProc replacement -------------------------------------
@@ -555,7 +560,13 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
         let Some(window) = app.get_webview_window("main") else {
             continue;
         };
-        let our_hwnd = match window.window_handle().unwrap().as_raw() {
+        // window_handle() can fail if the window is being torn down - skip
+        // this tick instead of panicking the thread (a panic would silently
+        // kill the Z-order defense for the rest of the session).
+        let Ok(handle) = window.window_handle() else {
+            continue;
+        };
+        let our_hwnd = match handle.as_raw() {
             RawWindowHandle::Win32(wh) => wh.hwnd.get() as isize,
             _ => 0,
         };
@@ -568,7 +579,7 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
         // virtual screen, including displays positioned left/above primary.
         let bounds = get_work_area(&app);
         if virtual_bounds != Some(bounds) {
-            unsafe {
+            let moved = unsafe {
                 crate::win32::SetWindowPos(
                     our_hwnd,
                     0,
@@ -577,9 +588,14 @@ fn polling_loop(app: tauri::AppHandle, state: Arc<DeskState>) {
                     bounds.2 as i32,
                     bounds.3 as i32,
                     constants::SWP_NOZORDER | constants::SWP_NOACTIVATE,
-                );
+                )
+            };
+            // Only trust the cache when the call actually succeeded - a
+            // failure (or a wndproc veto) must be retried next tick instead
+            // of being written off forever.
+            if moved != 0 {
+                virtual_bounds = Some(bounds);
             }
-            virtual_bounds = Some(bounds);
         }
 
         // Explorer owns the complete desktop context menu. Do not change its

@@ -1,4 +1,4 @@
-/** Translation keys - all UI strings used in the app. */
+﻿/** Translation keys - all UI strings used in the app. */
 export interface Translations {
     // General
     'app.name': string;
@@ -67,6 +67,7 @@ export interface Translations {
 
     // Toast messages
     'toast.load_config_failed': string;
+    'toast.scan_failed': string;
     'toast.open_file_failed': string;
     'toast.file_action_failed': string;
     'toast.rename_failed': string;
@@ -96,6 +97,9 @@ export interface Translations {
     'history.file_copy': string;
     'history.file_delete': string;
     'history.file_rename': string;
+    'history.reposition': string;
+    'history.import': string;
+    'history.reset': string;
 
     // Defaults
     'default.cell_title': string;
@@ -194,6 +198,7 @@ export const zhCN: Translations = {
     'organize.others': '\u5176\u4ED6',
 
     'toast.load_config_failed': '\u52A0\u8F7D\u914D\u7F6E\u5931\u8D25',
+    'toast.scan_failed': '\u626B\u63CF\u684C\u9762\u5931\u8D25\uFF0C\u53EF\u5728\u684C\u9762\u53F3\u952E\u83DC\u5355\u4E2D\u5237\u65B0',
     'toast.open_file_failed': '\u6253\u5F00\u6587\u4EF6\u5931\u8D25',
     'toast.file_action_failed': '\u6587\u4ef6\u64cd\u4f5c\u5931\u8d25',
     'toast.rename_failed': '\u91CD\u547D\u540D\u5931\u8D25',
@@ -222,6 +227,9 @@ export const zhCN: Translations = {
     'history.file_copy': '\u590D\u5236\u6587\u4EF6',
     'history.file_delete': '\u79FB\u5165\u56DE\u6536\u7AD9',
     'history.file_rename': '\u91CD\u547D\u540D\u6587\u4EF6',
+    'history.reposition': '\u91CD\u6392\u56FE\u6807',
+    'history.import': '\u5BFC\u5165\u914D\u7F6E',
+    'history.reset': '\u91CD\u7F6E\u914D\u7F6E',
 
     'default.cell_title': '\u683C\u5B50',
     'default.sub_title': '\u5B50\u76D2\u5B50',

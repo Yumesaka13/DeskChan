@@ -1,4 +1,4 @@
-import type { Translations } from './zh-CN';
+﻿import type { Translations } from './zh-CN';
 
 export const enUS: Translations = {
     'app.name': 'DeskChan Desktop Box',
@@ -62,6 +62,7 @@ export const enUS: Translations = {
     'organize.others': 'Others',
 
     'toast.load_config_failed': 'Failed to load configuration',
+    'toast.scan_failed': 'Failed to scan the desktop - use the desktop right-click menu to refresh',
     'toast.open_file_failed': 'Failed to open file',
     'toast.file_action_failed': 'File operation failed',
     'toast.rename_failed': 'Failed to rename',
@@ -90,6 +91,9 @@ export const enUS: Translations = {
     'history.file_copy': 'Copy files',
     'history.file_delete': 'Move to Recycle Bin',
     'history.file_rename': 'Rename file',
+    'history.reposition': 'Reposition icons',
+    'history.import': 'Import configuration',
+    'history.reset': 'Reset configuration',
 
     'default.cell_title': 'Cell',
     'default.sub_title': 'Sub-box',

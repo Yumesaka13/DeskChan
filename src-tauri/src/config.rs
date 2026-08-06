@@ -211,17 +211,54 @@ pub struct DesktopScan {
     pub entries: Vec<DesktopEntry>,
 }
 
-/// Load and validate config from a TOML file path.
-pub fn load_config(path: &std::path::Path) -> Result<DeskConfig, Box<dyn std::error::Error>> {
+/// Read and parse a config file WITHOUT validation - startup uses this so an
+/// otherwise-fine file with one bad field can be repaired instead of being
+/// thrown away and replaced with an empty first-run layout.
+pub fn parse_config(path: &std::path::Path) -> Result<DeskConfig, Box<dyn std::error::Error>> {
     if std::fs::metadata(path)?.len() > MAX_CONFIG_BYTES {
         return Err("configuration file is too large".into());
     }
     let content = std::fs::read_to_string(path)?;
-    let cfg: DeskConfig = toml::from_str(&content)?;
+    Ok(toml::from_str(&content)?)
+}
+
+/// Load and validate config from a TOML file path.
+pub fn load_config(path: &std::path::Path) -> Result<DeskConfig, Box<dyn std::error::Error>> {
+    let cfg = parse_config(path)?;
     validate_config(&cfg).map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     Ok(cfg)
 }
 
+/// Every filesystem path referenced by a config (icon targets, custom icon
+/// paths, and organize exclusions). Used to re-authorize imported or loaded
+/// configs so icons outside the desktop folders remain openable.
+pub fn config_icon_paths(cfg: &DeskConfig) -> Vec<std::path::PathBuf> {
+    let mut paths: Vec<std::path::PathBuf> = cfg
+        .free_icons
+        .iter()
+        .map(|icon| std::path::PathBuf::from(&icon.path))
+        .collect();
+    for cell in &cfg.cells {
+        paths.extend(
+            cell.icons
+                .iter()
+                .map(|icon| std::path::PathBuf::from(&icon.path)),
+        );
+        for sub in &cell.sub_cells {
+            paths.extend(
+                sub.icons
+                    .iter()
+                    .map(|icon| std::path::PathBuf::from(&icon.path)),
+            );
+        }
+    }
+    paths.extend(
+        cfg.excluded_from_organize
+            .iter()
+            .map(std::path::PathBuf::from),
+    );
+    paths
+}
 pub fn validate_config(cfg: &DeskConfig) -> Result<(), String> {
     if cfg.version > 3 {
         return Err("configuration version is newer than this application".into());
@@ -321,6 +358,193 @@ fn validate_id_and_text(id: &str, text: &str, ids: &mut HashSet<String>) -> Resu
     Ok(())
 }
 
+/// Repair a config that parsed but failed validation, in place. Fixes the
+/// common field-level problems - bad theme/opacity, non-finite geometry,
+/// duplicate IDs, unsupported sort settings, oversized lists - so the user's
+/// layout survives a config that is 99% fine (e.g. an opacity hand-edited to
+/// 0, or a value from a newer app version). Returns the number of fixes.
+///
+/// Configs that STILL fail validation afterwards (most notably `version > 3`,
+/// where the schema itself may differ) must be treated as unrecoverable by
+/// the caller.
+pub fn repair_config(cfg: &mut DeskConfig) -> usize {
+    let mut fixes = 0usize;
+
+    if !matches!(cfg.theme.as_str(), "light" | "dark" | "auto") {
+        cfg.theme = "auto".into();
+        fixes += 1;
+    }
+    if !cfg.desktop_overlay_opacity.is_finite() {
+        cfg.desktop_overlay_opacity = default_desktop_overlay_opacity();
+        fixes += 1;
+    } else if !(0.01..=0.5).contains(&cfg.desktop_overlay_opacity) {
+        cfg.desktop_overlay_opacity = cfg.desktop_overlay_opacity.clamp(0.01, 0.5);
+        fixes += 1;
+    }
+
+    cfg.excluded_from_organize.retain(|path| {
+        let keep = !path.is_empty() && path.chars().count() <= MAX_TEXT_CHARS;
+        if !keep {
+            fixes += 1;
+        }
+        keep
+    });
+
+    if cfg.cells.len() > MAX_CELLS {
+        cfg.cells.truncate(MAX_CELLS);
+        fixes += 1;
+    }
+
+    let mut seen = HashSet::new();
+    retain_repairable(&mut cfg.free_icons, &mut seen, &mut fixes);
+    for cell in &mut cfg.cells {
+        if cell.id.is_empty() || cell.id.chars().count() > 128 || !seen.insert(cell.id.clone()) {
+            cell.id = uuid::Uuid::new_v4().to_string();
+            fixes += 1;
+        }
+        if cell.title.chars().count() > MAX_TEXT_CHARS {
+            cell.title = cell.title.chars().take(MAX_TEXT_CHARS).collect();
+            fixes += 1;
+        }
+        if !cell.opacity.is_finite() {
+            cell.opacity = 1.0;
+            fixes += 1;
+        } else {
+            let clamped = cell.opacity.clamp(0.0, 1.0);
+            if clamped != cell.opacity {
+                cell.opacity = clamped;
+                fixes += 1;
+            }
+        }
+        if !matches!(cell.sort_field.as_str(), "name" | "type" | "modified") {
+            cell.sort_field = "name".into();
+            fixes += 1;
+        }
+        if !matches!(cell.sort_direction.as_str(), "asc" | "desc") {
+            cell.sort_direction = "asc".into();
+            fixes += 1;
+        }
+        if !(cell.rect.x.is_finite()
+            && cell.rect.y.is_finite()
+            && cell.rect.width.is_finite()
+            && cell.rect.height.is_finite()
+            && cell.rect.width > 0.0
+            && cell.rect.height > 0.0)
+        {
+            // A non-renderable cell gets a sane default geometry instead of
+            // being dropped (or, previously, wiping the whole config).
+            cell.rect = CellRect {
+                x: 100.0,
+                y: 100.0,
+                width: 200.0,
+                height: 200.0,
+            };
+            fixes += 1;
+        }
+        retain_repairable(&mut cell.icons, &mut seen, &mut fixes);
+        for sub in &mut cell.sub_cells {
+            if sub.id.is_empty() || sub.id.chars().count() > 128 || !seen.insert(sub.id.clone()) {
+                sub.id = uuid::Uuid::new_v4().to_string();
+                fixes += 1;
+            }
+            if sub.title.chars().count() > MAX_TEXT_CHARS {
+                sub.title = sub.title.chars().take(MAX_TEXT_CHARS).collect();
+                fixes += 1;
+            }
+            retain_repairable(&mut sub.icons, &mut seen, &mut fixes);
+        }
+        if let Some(active) = &cell.active_sub {
+            if !cell.sub_cells.iter().any(|sub| &sub.id == active) {
+                cell.active_sub = None;
+                fixes += 1;
+            }
+        }
+    }
+
+    // Oversized counts: trim from the least-user-visible end (trailing
+    // sub-cells, then cell icons, then free icons - which a rescan would
+    // re-derive from the desktop anyway).
+    let mut sub_total: usize = cfg.cells.iter().map(|c| c.sub_cells.len()).sum();
+    while sub_total > MAX_SUB_CELLS {
+        let Some(last) = cfg.cells.iter_mut().rev().find(|c| !c.sub_cells.is_empty()) else {
+            break;
+        };
+        last.sub_cells.pop();
+        sub_total -= 1;
+        fixes += 1;
+    }
+    let mut icon_total: usize = cfg.free_icons.len()
+        + cfg
+            .cells
+            .iter()
+            .map(|c| c.icons.len() + c.sub_cells.iter().map(|s| s.icons.len()).sum::<usize>())
+            .sum::<usize>();
+    'trim_icons: while icon_total > MAX_ICONS {
+        for cell in cfg.cells.iter_mut().rev() {
+            for sub in cell.sub_cells.iter_mut().rev() {
+                if sub.icons.pop().is_some() {
+                    icon_total -= 1;
+                    fixes += 1;
+                    continue 'trim_icons;
+                }
+            }
+            if cell.icons.pop().is_some() {
+                icon_total -= 1;
+                fixes += 1;
+                continue 'trim_icons;
+            }
+        }
+        if cfg.free_icons.pop().is_some() {
+            icon_total -= 1;
+            fixes += 1;
+            continue 'trim_icons;
+        }
+        break;
+    }
+
+    fixes
+}
+
+/// Repair one icon entry; returns false when the entry cannot be repaired
+/// (path too long to even represent) and the caller must drop it.
+fn repair_icon(icon: &mut DesktopIcon, seen: &mut HashSet<String>, fixes: &mut usize) -> bool {
+    if icon.path.chars().count() > MAX_TEXT_CHARS {
+        *fixes += 1;
+        return false;
+    }
+    if icon
+        .icon_path
+        .as_ref()
+        .is_some_and(|path| path.chars().count() > MAX_TEXT_CHARS)
+    {
+        icon.icon_path = None;
+        *fixes += 1;
+    }
+    if icon.id.is_empty() || icon.id.chars().count() > 128 || !seen.insert(icon.id.clone()) {
+        icon.id = uuid::Uuid::new_v4().to_string();
+        *fixes += 1;
+    }
+    if !icon.pos_x.is_finite() || !icon.pos_y.is_finite() {
+        // -1 sentinel: the frontend assigns the first free grid slot.
+        icon.pos_x = -1.0;
+        icon.pos_y = -1.0;
+        *fixes += 1;
+    }
+    true
+}
+
+/// Drop unrepairable entries while repairing the rest (Vec::retain only
+/// offers `&T`, so the owned list is rebuilt in place).
+fn retain_repairable(icons: &mut Vec<DesktopIcon>, seen: &mut HashSet<String>, fixes: &mut usize) {
+    let mut kept = Vec::with_capacity(icons.len());
+    for mut icon in std::mem::take(icons) {
+        if repair_icon(&mut icon, seen, fixes) {
+            kept.push(icon);
+        }
+    }
+    *icons = kept;
+}
+
 /// Save config to a TOML file path. Atomic (temp file + rename): a reader -
 /// including the next app launch - can never observe a truncated file, even
 /// if two writers race or the process dies mid-write.
@@ -328,9 +552,18 @@ pub fn save_config(
     path: &std::path::Path,
     cfg: &DeskConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
     let content = toml::to_string_pretty(cfg)?;
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, content)?;
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(content.as_bytes())?;
+        // Flush to disk BEFORE the rename: the rename above only protects
+        // against a crashed PROCESS. Without fsync, a power loss can commit
+        // the rename while the data blocks are still in the page cache,
+        // leaving a truncated (or empty) config on the next boot.
+        file.sync_all()?;
+    }
     // Same-volume rename replaces atomically on Windows (MOVEFILE_REPLACE_EXISTING)
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -342,6 +575,63 @@ pub fn is_app_extension(ext: &str) -> bool {
         ext.to_lowercase().as_str(),
         "exe" | "lnk" | "bat" | "cmd" | "msc"
     )
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn collects_icon_paths_from_every_container() {
+        let icon = |path: &str| DesktopIcon {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "icon".into(),
+            path: path.into(),
+            icon_path: None,
+            pos_x: 0.0,
+            pos_y: 0.0,
+        };
+        let cfg = DeskConfig {
+            free_icons: vec![icon(r"C:\a.txt")],
+            excluded_from_organize: vec![r"D:\keep.txt".into()],
+            cells: vec![Cell {
+                id: "cell".into(),
+                title: "cell".into(),
+                rect: CellRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                },
+                background_color: None,
+                opacity: 1.0,
+                layout: CellLayout::Grid,
+                sort_field: "name".into(),
+                sort_direction: "asc".into(),
+                collapsed: false,
+                hover_expand: false,
+                icons: vec![icon(r"C:\b.txt")],
+                sub_cells: vec![SubCell {
+                    id: "sub".into(),
+                    title: "sub".into(),
+                    icons: vec![icon(r"C:\c.txt")],
+                }],
+                active_sub: None,
+                sub_style: SubStyle::Compact,
+                show_title: true,
+            }],
+            ..DeskConfig::default()
+        };
+        let paths: Vec<String> = config_icon_paths(&cfg)
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert!(paths.contains(&r"C:\a.txt".to_string()));
+        assert!(paths.contains(&r"C:\b.txt".to_string()));
+        assert!(paths.contains(&r"C:\c.txt".to_string()));
+        assert!(paths.contains(&r"D:\keep.txt".to_string()));
+        assert_eq!(paths.len(), 4);
+    }
 }
 
 #[cfg(test)]
