@@ -24,6 +24,7 @@ export const enUS: Translations = {
     'icon.exclude_organize': 'Exclude from Auto-Organize',
     'icon.cut': 'Cut',
     'icon.copy': 'Copy',
+
     'icon.delete': 'Delete',
     'icon.properties': 'Properties',
     'icon.system_menu': 'More System Options',
@@ -49,6 +50,7 @@ export const enUS: Translations = {
     'desktop.context.personalize': 'Personalize',
     'desktop.context.display_settings': 'Display Settings',
     'desktop.context.system_menu': 'More System Options',
+    'desktop.context.show_desktop': 'Show Desktop',
     'desktop.context.exit': 'Exit DeskChan',
 
     'organize.folders': 'Folders',
@@ -60,6 +62,7 @@ export const enUS: Translations = {
     'organize.others': 'Others',
 
     'toast.load_config_failed': 'Failed to load configuration',
+    'toast.scan_failed': 'Failed to scan the desktop - use the desktop right-click menu to refresh',
     'toast.open_file_failed': 'Failed to open file',
     'toast.file_action_failed': 'File operation failed',
     'toast.rename_failed': 'Rename failed',
@@ -73,6 +76,8 @@ export const enUS: Translations = {
     'toast.export_failed': 'Export failed',
     'toast.import_done': 'Configuration imported',
     'toast.import_failed': 'Import failed - is the file valid?',
+    'confirm.delete_one': 'Move this item to the Recycle Bin?',
+    'confirm.delete_many': 'Move the selected items to the Recycle Bin?',
 
     'history.title': 'History',
     'history.empty': 'No actions to undo',
@@ -86,6 +91,9 @@ export const enUS: Translations = {
     'history.file_copy': 'Copy files',
     'history.file_delete': 'Move to Recycle Bin',
     'history.file_rename': 'Rename file',
+    'history.reposition': 'Reposition icons',
+    'history.import': 'Import configuration',
+    'history.reset': 'Reset configuration',
 
     'default.cell_title': 'Cell',
     'default.sub_title': 'Sub-box',
@@ -97,6 +105,7 @@ export const enUS: Translations = {
     'settings.file_extensions': 'File Name Extensions',
     'settings.file_extensions_show': 'Show',
     'settings.file_extensions_hide': 'Hide',
+    'settings.shortcut_extensions': 'Shortcut .lnk Extension',
     'settings.file_menu_styled': 'Styled Menu',
     'settings.file_menu_native': 'Native Menu',
     'settings.language': 'Language',

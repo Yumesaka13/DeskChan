@@ -22,6 +22,7 @@ export interface DesktopIconProps {
     onSelect?: (icon: DesktopIconData, e: MouseEvent) => void;
     selected?: boolean;
     showFileExtensions?: boolean;
+    showShortcutExtensions?: boolean;
     /** Compact row presentation used by cell list layout. */
     listLayout?: boolean;
     onDragStart?: (iconId: string, e: PointerEvent) => void;
@@ -38,7 +39,11 @@ export interface DesktopIconProps {
 
 export default function DesktopIcon(props: DesktopIconProps) {
     const [iconUrl] = createResource(() => props.icon.path, fetchIcon);
-    const displayName = () => displayIconName(props.icon, props.showFileExtensions ?? true);
+    const displayName = () => displayIconName(
+        props.icon,
+        props.showFileExtensions ?? true,
+        props.showShortcutExtensions ?? false,
+    );
     const [draftName, setDraftName] = createSignal('');
     let inputRef!: HTMLInputElement;
     let cancelingRename = false;

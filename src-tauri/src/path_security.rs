@@ -23,14 +23,52 @@ impl PathAuthorizations {
             .write()
             .expect("path authorization lock poisoned");
         for path in paths {
-            if let Ok(path) = validate_existing_local_path(&path.to_string_lossy()) {
-                authorized.insert(path_key(&path), path);
+            // Register the ORIGINAL spelling first: operations must act on
+            // the path the user sees. Resolving a symlink/junction to its
+            // target here would make "delete" recycle the TARGET directory
+            // instead of the link. Existence is not required either - a
+            // dangling link must still be deletable, not just displayable.
+            let Ok(path) = validate_local_path(&path.to_string_lossy()) else {
+                continue;
+            };
+            authorized.insert(path_key(&path), path.clone());
+            // Also register the canonical spelling, so callers passing
+            // already-resolved forms (e.g. `\\?\C:\...` from canonicalize)
+            // match the same entry.
+            if let Ok(canonical) = path.canonicalize() {
+                if let Ok(canonical) = strip_extended_drive_prefix(canonical) {
+                    if validate_local_path(&canonical.to_string_lossy()).is_ok() {
+                        authorized.insert(path_key(&canonical), canonical);
+                    }
+                }
             }
         }
     }
 
     pub fn resolve(&self, value: &str) -> Result<PathBuf, String> {
-        let path = validate_existing_local_path(value)?;
+        let path = validate_local_path(value)?;
+        let lock = self.paths.read().expect("path authorization lock poisoned");
+        // Raw spelling first - keeps symlinks as links (see authorize).
+        if let Some(known) = lock.get(&path_key(&path)) {
+            return Ok(known.clone());
+        }
+        // Fall back to the canonical spelling for inputs that went through
+        // canonicalization (extended-path prefixes, junctions, ...).
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("invalid path: {e}"))?;
+        let canonical = strip_extended_drive_prefix(canonical)?;
+        validate_local_path(&canonical.to_string_lossy())?;
+        lock.get(&path_key(&canonical))
+            .cloned()
+            .ok_or_else(|| "path was not authorized by a desktop scan or native file drop".into())
+    }
+
+    /// Resolve a path that may NOT currently exist - e.g. the write target of
+    /// an undo/redo record, which only the operation itself re-creates.
+    /// Only the known-path registry is consulted; nothing is canonicalized.
+    pub fn resolve_known(&self, value: &str) -> Result<PathBuf, String> {
+        let path = validate_local_path(value)?;
         self.paths
             .read()
             .expect("path authorization lock poisoned")

@@ -7,15 +7,15 @@
 import { createSignal, onMount, onCleanup, createEffect, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow, monitorFromPoint } from '@tauri-apps/api/window';
+import { cursorPosition, getCurrentWindow, monitorFromPoint } from '@tauri-apps/api/window';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from '~/i18n';
 import type { DeskConfig } from '@bindings/DeskConfig';
 import type { DesktopScan } from '@bindings/DesktopScan';
 import type { Cell } from '@bindings/Cell';
 import type { DesktopIcon as DIcon } from '@bindings/DesktopIcon';
-import { arrangeFreeIcons, displayIconName, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid, sortFreeIcons, type SortDirection, type SortField } from '~/lib/grid';
-import { popRedo, popUndo, pushHistory, type HistoryState } from '~/lib/history';
+import { arrangeFreeIcons, deduplicateConfigIcons, displayIconName, effectiveCellRect, nearestFreeSlot, reconcileConfig, snapToGrid, sortFreeIcons, type SortDirection, type SortField } from '~/lib/grid';
+import { HISTORY_LIMIT, popRedo, popUndo, pushHistory, type HistoryState } from '~/lib/history';
 import { allIcons, deleteSubCell, removeIcon, reorderIcons, withActiveIcons } from '~/lib/cell';
 import { dragRect, iconsInRect, sameParentDir } from '~/lib/select';
 import { organizeConfig, type CategoryKey } from '~/lib/organize';
@@ -24,7 +24,7 @@ import CellBox from './ui/CellBox';
 import DesktopIconComponent from './ui/DesktopIcon';
 import ContextMenu from './ui/ContextMenu';
 import SettingsDialog from './ui/SettingsDialog';
-import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid, FiImage, FiMonitor, FiMoreHorizontal, FiClipboard, FiCopy, FiMove, FiTrash2, FiClock, FiX, FiEdit2 } from 'solid-icons/fi';
+import { FiCheck, FiPlus, FiRefreshCw, FiSettings, FiPower, FiFile, FiGrid, FiImage, FiMonitor, FiMoreHorizontal, FiClipboard, FiCopy, FiMove, FiTrash2, FiClock, FiX, FiEdit2, FiMinimize2 } from 'solid-icons/fi';
 import toast from 'solid-toast';
 
 export default function Desktop() {
@@ -58,10 +58,13 @@ export default function Desktop() {
         setSettingsOpen(true);
     };
     const [fileMenu, setFileMenu] = createSignal<{ icon: DIcon; cellId?: string; x: number; y: number } | null>(null);
+    const [renamingIconId, setRenamingIconId] = createSignal<string | null>(null);
+    let committingRenameIconId: string | null = null;
     const pendingExternalMoves = new Set<string>();
     const [sortField, setSortField] = createSignal<SortField>('name');
     const [sortDirection, setSortDirection] = createSignal<SortDirection>('asc');
     const [historyOpen, setHistoryOpen] = createSignal(false);
+    const [historyPosition, setHistoryPosition] = createSignal<{ x: number; y: number } | null>(null);
     interface HistoryEntry {
         id: string;
         label: string;
@@ -75,7 +78,55 @@ export default function Desktop() {
     const [history, setHistory] = createSignal<HistoryState<HistoryEntry>>({ undo: [], redo: [] });
     let applyingHistory = false;
 
+    const openHistory = async () => {
+        const fallback = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        try {
+            const appWindow = getCurrentWindow();
+            const [cursor, outer, scale] = await Promise.all([
+                cursorPosition(),
+                appWindow.outerPosition(),
+                appWindow.scaleFactor(),
+            ]);
+            const monitor = await monitorFromPoint(cursor.x, cursor.y);
+            if (monitor) {
+                const area = monitor.workArea;
+                setHistoryPosition({
+                    x: (area.position.x - outer.x + area.size.width / 2) / scale,
+                    y: (area.position.y - outer.y + area.size.height / 2) / scale,
+                });
+            } else {
+                setHistoryPosition({
+                    x: (cursor.x - outer.x) / scale,
+                    y: (cursor.y - outer.y) / scale,
+                });
+            }
+        } catch {
+            setHistoryPosition(fallback);
+        }
+        setHistoryOpen(true);
+    };
+
     const cloneConfig = (value: DeskConfig) => structuredClone(value);
+
+    /**
+     * Push a history entry and notify the backend about backups made
+     * unreachable: the bounded history just evicted the oldest undo entry,
+     * and a new action clears the whole redo stack. Their file backups
+     * would otherwise sit in AppData forever.
+     */
+    const pushHistoryEntry = (entry: HistoryEntry) => {
+        const current = history();
+        const orphaned: HistoryEntry[] = [];
+        if (current.undo.length >= HISTORY_LIMIT) orphaned.push(current.undo[0]);
+        orphaned.push(...current.redo);
+        setHistory(pushHistory(current, entry));
+        for (const old of orphaned) {
+            if (old.file?.backups?.length) {
+                invoke('discard_undo_backups', { backups: old.file.backups }).catch(() => {});
+            }
+        }
+    };
+
     const commitConfig = (label: string, change: (current: DeskConfig) => DeskConfig, file?: FileUndoRecord) => {
         const before = config();
         if (!before) return;
@@ -83,49 +134,60 @@ export default function Desktop() {
         if (after === before) return;
         setConfig(after);
         if (!applyingHistory) {
-            setHistory((current) => pushHistory(current, {
+            pushHistoryEntry({
                 id: crypto.randomUUID(), label, before: cloneConfig(before), after: cloneConfig(after), file,
-            }));
+            });
         }
     };
-    const undoLatest = async () => {
+    /** Undo one entry. Returns false when it failed - the entry stays on the
+     *  stack, so callers must not retry in a loop. */
+    const undoLatest = async (): Promise<boolean> => {
         const { entry, state } = popUndo(history());
-        if (!entry) return;
+        if (!entry) return true;
         try {
             if (entry.file) await invoke('undo_file_operation', { record: entry.file });
         } catch {
             toast.error(t('toast.file_action_failed'));
-            return;
+            return false;
         }
         applyingHistory = true;
         setConfig(cloneConfig(entry.before));
         applyingHistory = false;
         setHistory(state);
+        // The snapshot may be older than watcher reconciles that landed
+        // while the file operation was running - re-merge the real desktop
+        // so freshly added icons are not rolled back (and persisted).
+        void reconcileDesktop();
+        return true;
     };
-    const redoLatest = async () => {
+    const redoLatest = async (): Promise<boolean> => {
         const { entry, state } = popRedo(history());
-        if (!entry) return;
+        if (!entry) return true;
         try {
             if (entry.file) await invoke('redo_file_operation', { record: entry.file });
         } catch {
             toast.error(t('toast.file_action_failed'));
-            return;
+            return false;
         }
         applyingHistory = true;
         setConfig(cloneConfig(entry.after));
         applyingHistory = false;
         setHistory(state);
+        void reconcileDesktop();
+        return true;
     };
     const undoThrough = async (index: number) => {
-        while (history().undo.length > index) await undoLatest();
+        while (history().undo.length > index) {
+            // A failed file undo keeps its entry on the stack - bail out
+            // instead of retrying forever (each retry re-invokes the failing
+            // operation and spams an error toast per iteration).
+            if (!(await undoLatest())) break;
+        }
         setHistoryOpen(false);
     };
 
     // Multi-selection of free icons (marquee / ctrl+click), Windows-like
     const [selectedIds, setSelectedIds] = createSignal<ReadonlySet<string>>(new Set());
-    const [renamingIconId, setRenamingIconId] = createSignal<string | null>(null);
-    let committingRenameIconId: string | null = null;
-
     const allConfigIcons = (cfg: DeskConfig): DIcon[] => [
         ...cfg.free_icons,
         ...cfg.cells.flatMap(allIcons),
@@ -165,7 +227,7 @@ export default function Desktop() {
     let marqueeAdditive = false; // ctrl held at start -> add to the selection
     let marqueeBase: ReadonlySet<string> = new Set();
 
-    const handleDesktopMouseDown = (e: MouseEvent) => {
+    const handleDesktopPointerDown = (e: PointerEvent) => {
         // Only start on the bare desktop background (button 0); icons and
         // cells are absolutely-positioned children, so target != currentTarget
         if (e.button !== 0 || e.target !== e.currentTarget) return;
@@ -177,9 +239,16 @@ export default function Desktop() {
         // our window mid-gesture (it can break WebView2's pointer capture)
         invoke('set_dragging', { dragging: true }).catch(() => {});
 
-        const move = (ev: MouseEvent) => {
+        // The gesture can end OUTSIDE the window (the pointer is released
+        // over the taskbar, which the overlay does not cover); a document
+        // mouseup is then never delivered and `set_dragging` would stay
+        // stuck at true, disabling the Z-order polling loop until the next
+        // gesture. Track pointerleave / lostpointercapture too (the same
+        // fallbacks the icon-drag path uses).
+        let done = false;
+        const move = (ev: PointerEvent) => {
             const m = marquee();
-            if (!m) return; // cancelled (Escape) - mouseup will detach us
+            if (!m) return; // cancelled (Escape) - pointerup will detach us
             const next = { ...m, x1: ev.clientX, y1: ev.clientY };
             setMarquee(next);
             // Live selection while dragging, like Explorer
@@ -189,9 +258,14 @@ export default function Desktop() {
             );
             setSelectedIds(marqueeAdditive ? new Set([...marqueeBase, ...hit]) : new Set(hit));
         };
-        const up = () => {
-            document.removeEventListener('mousemove', move);
-            document.removeEventListener('mouseup', up);
+        const up = () => finish();
+        const finish = () => {
+            if (done) return;
+            done = true;
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointerleave', finish);
+            window.removeEventListener('lostpointercapture', finish);
             invoke('set_dragging', { dragging: false }).catch(() => {});
             const m = marquee();
             setMarquee(null);
@@ -200,8 +274,10 @@ export default function Desktop() {
                 setSelectedIds(new Set<string>());
             }
         };
-        document.addEventListener('mousemove', move);
-        document.addEventListener('mouseup', up);
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointerleave', finish);
+        window.addEventListener('lostpointercapture', finish);
     };
 
     // Hover-expand state lives here (not in CellBox) so it survives cell
@@ -249,18 +325,18 @@ export default function Desktop() {
     // Core of auto-refresh: scan the real desktop folders and sync the
     // config (add new files into free slots, drop deleted ones). Triggered
     // on mount, by the Rust folder watcher, and by the Refresh menu item.
-    const reconcileSnapshot = (cfg: DeskConfig, scan: DesktopScan) => {
-        const next = reconcileConfig(cfg, scan, viewportSize());
+    const reconcileSnapshot = (cfg: DeskConfig, scan: DesktopScan, removedPaths: readonly string[] = []) => {
+        const next = reconcileConfig(cfg, scan, viewportSize(), removedPaths);
         // Auto-arrange compacts the layout on every desktop change.
         return cfg.auto_arrange && next !== cfg ? arrangeFreeIcons(next, viewportSize()) : next;
     };
 
-    const reconcileDesktop = async () => {
+    const reconcileDesktop = async (removedPaths: readonly string[] = []) => {
         try {
             const scan = await invoke<DesktopScan>('scan_desktop');
             setConfig((p) => {
                 if (!p) return p;
-                return reconcileSnapshot(p, scan);
+                return reconcileSnapshot(p, scan, removedPaths);
             });
         } catch {
             /* scan is best-effort; manual refresh can retry */
@@ -285,7 +361,12 @@ export default function Desktop() {
         } catch {
             // Keep the saved layout usable if the first native scan fails;
             // watcher events and manual Refresh will retry reconciliation.
-            setConfig(loaded);
+            // Still clean duplicate entries left by older rename versions.
+            setConfig(deduplicateConfigIcons(loaded));
+            // A first-run config is all sentinel (-1) icons, which render as
+            // display:none - without a hint the user would just see an empty
+            // desktop and not know a right-click refresh fixes it.
+            toast.error(t('toast.scan_failed'));
         }
     });
 
@@ -293,6 +374,19 @@ export default function Desktop() {
         const unlisten = listen('desktop-changed', () => { void reconcileDesktop(); });
         onCleanup(() => { void unlisten.then((fn) => fn()); });
     });
+
+    // -- Drag lifecycle (shared by the keyboard handler and the pointer
+    //    drag tracking; kept at component scope so Escape can reset the
+    //    Rust-side `set_dragging` flag even mid-gesture) ---------------
+    let dragTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearDragPreview = () => {
+        setDragState(null);
+        if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
+    };
+    const clearDrag = () => {
+        clearDragPreview();
+        invoke('set_dragging', { dragging: false }).catch(() => {});
+    };
 
     // -- Keyboard shortcuts: context menu + cancel drag -------------------
     onMount(() => {
@@ -303,7 +397,7 @@ export default function Desktop() {
                 || target?.isContentEditable;
             if (!editing && e.ctrlKey && e.altKey && e.key.toLowerCase() === 'z') {
                 e.preventDefault();
-                setHistoryOpen(true);
+                void openHistory();
                 return;
             }
             if (!editing && e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'z') {
@@ -321,14 +415,6 @@ export default function Desktop() {
                 void pasteFromClipboard('auto');
                 return;
             }
-            if (e.key === 'F2' && !editing) {
-                const icons = selectedIcons();
-                if (icons.length === 1) {
-                    e.preventDefault();
-                    startRenameIcon(icons[0]);
-                }
-                return;
-            }
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !editing) {
                 const paths = selectedPaths();
                 if (paths.length > 0) {
@@ -341,8 +427,17 @@ export default function Desktop() {
                 const paths = selectedPaths();
                 if (paths.length > 0) {
                     e.preventDefault();
-                    void deletePaths(paths);
-                    setSelectedIds(new Set<string>());
+                    void deletePaths(paths).then((deleted) => {
+                        if (deleted) setSelectedIds(new Set<string>());
+                    });
+                }
+                return;
+            }
+            if (e.key === 'F2' && !editing) {
+                const icons = selectedIcons();
+                if (icons.length === 1) {
+                    e.preventDefault();
+                    startRenameIcon(icons[0]);
                 }
                 return;
             }
@@ -351,9 +446,15 @@ export default function Desktop() {
                 e.preventDefault();
                 setContextMenu({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
             }
-            // Escape -> cancel drag / close menu / clear selection
-            if (e.key === 'Escape') {
-                setDragState(null);
+            // Escape -> cancel drag / close menu / clear selection.
+            // clearDrag also resets the Rust-side `set_dragging` flag:
+            // without it, a drag cancelled before any movement would leave
+            // the flag stuck at true, silently disabling the Z-order
+            // polling loop until the next full drag gesture.
+            // Guarded like every other shortcut: rename inputs currently
+            // stopPropagation themselves, but this must not depend on that.
+            if (e.key === 'Escape' && !editing) {
+                clearDrag();
                 setContextMenu(null);
                 setHistoryOpen(false);
                 setRenamingIconId(null);
@@ -369,17 +470,6 @@ export default function Desktop() {
 
     // -- Global pointer-event drag tracking ------------------------------
     onMount(() => {
-        let dragTimer: ReturnType<typeof setTimeout> | null = null;
-
-        const clearDragPreview = () => {
-            setDragState(null);
-            if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
-        };
-        const clearDrag = () => {
-            clearDragPreview();
-            invoke('set_dragging', { dragging: false }).catch(() => {});
-        };
-
         const dragPaths = (ds: DragState): string[] => {
             const groupIds = new Set(
                 (ds.group.length > 0 ? ds.group : [ds.icon]).map((g) => g.id),
@@ -409,7 +499,6 @@ export default function Desktop() {
             const ds = dragState();
             if (!ds) return;
             if (!ds.moved) { clearDrag(); return; } // plain click, not a drag
-            suppressNextClick = true; // the trailing click must not reset the selection
             const targetCell = cellAtPoint(ds.x, ds.y);
             // Re-resolve members from the CURRENT config - a watcher
             // reconcile mid-drag may have replaced or removed icon objects,
@@ -417,6 +506,20 @@ export default function Desktop() {
             const groupIds = new Set(
                 (ds.group.length > 0 ? ds.group : [ds.icon]).map((g) => g.id),
             );
+            // The trailing click after a drag would collapse a fresh
+            // multi-selection - but only if it lands on a dragged icon.
+            // Setting the flag unconditionally made it linger after drags
+            // that end on empty desktop, silently eating the NEXT click.
+            const droppedOnId = document.elementFromPoint(ds.x, ds.y)
+                ?.closest('[data-icon-id]')
+                ?.getAttribute('data-icon-id') ?? null;
+            suppressNextClick = droppedOnId !== null && groupIds.has(droppedOnId);
+            if (suppressNextClick) {
+                // The trailing click that normally consumes this flag may
+                // never fire (e.g. release outside the window) - don't let
+                // it eat the user's next click forever.
+                setTimeout(() => { suppressNextClick = false; }, 500);
+            }
 
             if (targetCell && targetCell !== ds.cellId) {
                 // The whole selection drops into the target's active tab
@@ -461,7 +564,7 @@ export default function Desktop() {
                     // live config, not the drag-start snapshot.
                     const dx = ds.x - ds.startX;
                     const dy = ds.y - ds.startY;
-                    commitConfig(t('history.move_into_cell'), (p) => {
+                    commitConfig(t('history.reposition'), (p) => {
                         if (!p) return p;
                         const cellRects = p.cells.map(effectiveCellRect);
                         const occupied = p.free_icons
@@ -496,18 +599,30 @@ export default function Desktop() {
             if (!ds) return;
             if (!ds.moved) { clearDrag(); return; }
 
-            suppressNextClick = true;
+            // The native drag session owns the pointer from here - no
+            // trailing click follows on our icons, and a stale flag would
+            // swallow the user's next click.
+            suppressNextClick = false;
             const paths = dragPaths(ds);
             clearDragPreview();
             if ((e.buttons & 1) === 0 || paths.length === 0) {
                 invoke('set_dragging', { dragging: false }).catch(() => {});
                 return;
             }
-            void invoke('start_native_file_drag', { paths })
-                .catch(() => toast.error(t('toast.file_action_failed')))
-                .finally(() => {
+            void invoke<number>('start_native_file_drag', { paths })
+                .then((effect) => {
+                    // A native MOVE removes the source from its original location.
+                    // Tell reconciliation explicitly so imported, non-desktop icons
+                    // do not remain as stale config entries.
+                    return (effect & 2) !== 0 ? paths : [];
+                })
+                .catch(() => {
+                    toast.error(t('toast.file_action_failed'));
+                    return [];
+                })
+                .then((removedPaths) => {
                     invoke('set_dragging', { dragging: false }).catch(() => {});
-                    void reconcileDesktop();
+                    void reconcileDesktop(removedPaths);
                 });
         };
 
@@ -527,13 +642,22 @@ export default function Desktop() {
     });
 
     // -- Save config (debounced, not in frequent callbacks) ---------------
+    // Every write is stamped with a monotonically increasing revision; the
+    // backend ignores stale revisions so a debounced save already in flight
+    // can never clobber a newer import/reset that landed afterwards.
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
+    let saveRev = 0;
+    const flushSave = () => {
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+        const cfg = config();
+        if (cfg) invoke('save_config', { cfg, rev: ++saveRev }).catch(() => {});
+    };
     createEffect(() => {
         const cfg = config();
         if (!cfg) return;
         if (saveTimer) clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
-            invoke('save_config', { cfg }).catch(() => {});
+            invoke('save_config', { cfg, rev: ++saveRev }).catch(() => {});
         }, 300);
         onCleanup(() => clearTimeout(saveTimer!));
     });
@@ -736,17 +860,21 @@ export default function Desktop() {
 
     const pasteFromClipboard = async (mode: 'auto' | 'copy' | 'move') => {
         try {
-            const before = config();
             const mutation = await invoke<FileMutation>('paste_from_clipboard_with_undo', { mode });
-            if (mutation.paths.length > 0 && before) {
+            if (mutation.paths.length > 0) {
                 const scan = await invoke<DesktopScan>('scan_desktop');
+                // Derive from the CURRENT config: watcher reconciles that
+                // landed while the clipboard was being read must survive.
+                // A stale `before` snapshot would roll them back.
+                const before = config();
+                if (!before) return;
                 const after = reconcileSnapshot(before, scan);
                 setConfig(after);
-                setHistory((current) => pushHistory(current, {
+                pushHistoryEntry({
                     id: crypto.randomUUID(),
                     label: t(mutation.record.kind === 'copy' ? 'history.file_copy' : 'history.file_move'),
                     before: cloneConfig(before), after: cloneConfig(after), file: mutation.record,
-                }));
+                });
             }
         } catch {
             toast.error(t('toast.paste_failed'));
@@ -823,10 +951,23 @@ export default function Desktop() {
 
     const importConfig = async () => {
         try {
-            const imported = await invoke<DeskConfig | null>('import_config');
+            const before = config();
+            const imported = await invoke<DeskConfig | null>('import_config', { rev: saveRev });
             if (!imported) return;
             setConfig(imported);
             await reconcileDesktop();
+            const after = config();
+            if (before && after) {
+                pushHistoryEntry({
+                    id: crypto.randomUUID(),
+                    label: t('history.import'),
+                    before: cloneConfig(before),
+                    after: cloneConfig(after),
+                });
+            }
+            // Persist the imported layout immediately (and with a fresh
+            // revision) so an older debounced save cannot clobber it.
+            flushSave();
             toast.success(t('toast.import_done'));
         } catch {
             toast.error(t('toast.import_failed'));
@@ -837,8 +978,19 @@ export default function Desktop() {
         try {
             // Destructive (removes all cells) -> native confirm first
             if (!(await ask(t('settings.reset_confirm'), { kind: 'warning' }))) return;
-            setConfig(await invoke<DeskConfig>('reset_config'));
+            const before = config();
+            setConfig(await invoke<DeskConfig>('reset_config', { rev: saveRev }));
             await reconcileDesktop();
+            const after = config();
+            if (before && after) {
+                pushHistoryEntry({
+                    id: crypto.randomUUID(),
+                    label: t('history.reset'),
+                    before: cloneConfig(before),
+                    after: cloneConfig(after),
+                });
+            }
+            flushSave();
             toast.success(t('toast.reset_done'));
         } catch {
             toast.error(t('toast.load_config_failed'));
@@ -882,25 +1034,35 @@ export default function Desktop() {
         }
     };
 
-    const excludedFromOrganize = (icon: DIcon) =>
-        config()?.excluded_from_organize.some((path) => path.toLowerCase() === icon.path.toLowerCase()) ?? false;
+    const excludedFromOrganize = (paths: string[]) => {
+        const excluded = new Set(config()?.excluded_from_organize.map((path) => path.toLowerCase()) ?? []);
+        return paths.length > 0 && paths.every((path) => excluded.has(path.toLowerCase()));
+    };
 
-    const toggleOrganizeExclusion = (icon: DIcon) => {
-        const key = icon.path.toLowerCase();
+    const toggleOrganizeExclusion = (paths: string[]) => {
+        const keys = new Set(paths.map((path) => path.toLowerCase()));
         commitConfig(t('history.edit_cell'), (p) => {
             if (!p) return p;
-            const excluded = p.excluded_from_organize.some((path) => path.toLowerCase() === key);
+            const excluded = keys.size > 0 && [...keys].every((key) =>
+                p.excluded_from_organize.some((path) => path.toLowerCase() === key));
             return {
                 ...p,
                 excluded_from_organize: excluded
-                    ? p.excluded_from_organize.filter((path) => path.toLowerCase() !== key)
-                    : [...p.excluded_from_organize, icon.path],
+                    ? p.excluded_from_organize.filter((path) => !keys.has(path.toLowerCase()))
+                    : [...p.excluded_from_organize, ...paths.filter((path) =>
+                        !p.excluded_from_organize.some((existing) => existing.toLowerCase() === path.toLowerCase()))],
             };
         });
     };
 
     const selectedPaths = () => {
         return selectedIcons().map((icon) => icon.path);
+    };
+
+    const fileMenuPaths = () => {
+        const menu = fileMenu();
+        if (!menu) return [];
+        return selectedIds().has(menu.icon.id) ? selectedPaths() : [menu.icon.path];
     };
 
     const startRenameIcon = (icon: DIcon) => {
@@ -919,33 +1081,39 @@ export default function Desktop() {
             const mutation = await invoke<RenamedIconMutation>('rename_desktop_icon_with_undo', {
                 path: icon.path,
                 name,
-                preserveExtension: !before.show_file_extensions,
+                preserveExtension: icon.path.toLowerCase().endsWith('.lnk')
+                    ? !before.show_shortcut_extensions
+                    : !before.show_file_extensions,
             });
             const oldPath = icon.path.toLowerCase();
             const updateIcon = (candidate: DIcon): DIcon =>
                 candidate.path.toLowerCase() === oldPath
                     ? { ...candidate, path: mutation.path, name: mutation.name }
                     : candidate;
+            // Apply to the CURRENT config so a watcher reconcile during the
+            // rename isn't rolled back by the stale pre-rename snapshot.
+            const current = config();
+            if (!current) return;
             const after: DeskConfig = {
-                ...before,
-                free_icons: before.free_icons.map(updateIcon),
-                excluded_from_organize: before.excluded_from_organize.map((path) =>
+                ...current,
+                free_icons: current.free_icons.map(updateIcon),
+                excluded_from_organize: current.excluded_from_organize.map((path) =>
                     path.toLowerCase() === oldPath ? mutation.path : path,
                 ),
-                cells: before.cells.map((cell) => ({
+                cells: current.cells.map((cell) => ({
                     ...cell,
                     icons: cell.icons.map(updateIcon),
                     sub_cells: cell.sub_cells.map((sub) => ({ ...sub, icons: sub.icons.map(updateIcon) })),
                 })),
             };
             setConfig(after);
-            setHistory((current) => pushHistory(current, {
+            pushHistoryEntry({
                 id: crypto.randomUUID(),
                 label: t('history.file_rename'),
-                before: cloneConfig(before),
+                before: cloneConfig(current),
                 after: cloneConfig(after),
                 file: mutation.record,
-            }));
+            });
             setSelectedIds(new Set([icon.id]));
             setRenamingIconId(null);
         } catch {
@@ -959,7 +1127,7 @@ export default function Desktop() {
         const menu = fileMenu();
         if (!menu) return;
         try {
-            const paths = selectedIds().has(menu.icon.id) ? selectedPaths() : nativeMenuPaths(menu.icon);
+            const paths = fileMenuPaths();
             if (action === 'delete') await deletePaths(paths);
             else await invoke('file_action', { paths, action });
         } catch {
@@ -967,11 +1135,17 @@ export default function Desktop() {
         }
     };
 
-    const deletePaths = async (paths: string[]) => {
-        const before = config();
-        if (!before) return;
+    const deletePaths = async (paths: string[]): Promise<boolean> => {
+        if (paths.length === 0) return false;
+        const message = paths.length === 1 ? t('confirm.delete_one') : t('confirm.delete_many');
+        if (!(await ask(message, { kind: 'warning' }))) return false;
         try {
             const mutation = await invoke<FileMutation>('delete_with_undo', { paths });
+            // The confirmation dialog can stay open for a long time; watcher
+            // reconciles that happened meanwhile must not be rolled back by
+            // applying a stale snapshot.
+            const before = config();
+            if (!before) return true;
             const removed = new Set(paths.map((path) => path.toLowerCase()));
             const after: DeskConfig = {
                 ...before,
@@ -983,11 +1157,15 @@ export default function Desktop() {
                 })),
             };
             setConfig(after);
-            setHistory((current) => pushHistory(current, {
+            pushHistoryEntry({
                 id: crypto.randomUUID(), label: t('history.file_delete'),
                 before: cloneConfig(before), after: cloneConfig(after), file: mutation.record,
-            }));
-        } catch { toast.error(t('toast.file_action_failed')); }
+            });
+            return true;
+        } catch {
+            toast.error(t('toast.file_action_failed'));
+            return false;
+        }
     };
 
     const showFileMenu = (icon: DIcon, cellId: string | undefined, event: MouseEvent) => {
@@ -1027,7 +1205,7 @@ export default function Desktop() {
             // The interaction surface is visually transparent: wallpaper is
             // never tinted. Contrast is applied by each CellBox instead.
             style={{ "background-color": 'transparent' }}
-            onMouseDown={handleDesktopMouseDown}
+            onPointerDown={handleDesktopPointerDown}
             onContextMenu={(e) => {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY });
@@ -1050,6 +1228,7 @@ export default function Desktop() {
                             )
                         }
                         onDragStart={(iconId, cellId, icon, e) => {
+                            suppressNextClick = false; // a fresh gesture is never a stale trailing click
                             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                             setDragState({
                                 iconId, source: 'cell', cellId, icon,
@@ -1079,6 +1258,7 @@ export default function Desktop() {
                         onRenameIcon={(icon, name) => { void renameIcon(icon, name); }}
                         onRenameIconCancel={() => setRenamingIconId(null)}
                         showFileExtensions={config()?.show_file_extensions ?? true}
+                        showShortcutExtensions={config()?.show_shortcut_extensions ?? false}
                         desktopOverlayOpacity={config()?.desktop_overlay_opacity ?? 0.01}
                         onRename={(id, title) => updateCell(id, (c) => ({ ...c, title }))}
                         onCreateSub={createSubCell}
@@ -1118,6 +1298,7 @@ export default function Desktop() {
                 {(icon) => (
                     <div
                         data-icon
+                        data-icon-id={icon.id}
                         class={selectedIds().has(icon.id) ? 'absolute z-30' : 'absolute z-0'}
                         style={{
                             left: `${icon.pos_x}px`,
@@ -1129,6 +1310,7 @@ export default function Desktop() {
                         <DesktopIconComponent
                             icon={icon}
                             showFileExtensions={config()?.show_file_extensions ?? true}
+                            showShortcutExtensions={config()?.show_shortcut_extensions ?? false}
                             selected={selectedIds().has(icon.id)}
                             onSelect={selectIcon}
                             onOpen={openIcon}
@@ -1138,6 +1320,7 @@ export default function Desktop() {
                             onNativeMenu={(icon, event) => showFileMenu(icon, undefined, event)}
                             labelClass="desktop-icon-label"
                             onDragStart={(iconId, e) => {
+                                suppressNextClick = false; // a fresh gesture is never a stale trailing click
                                 // Pointer-down on an unselected icon selects it
                                 // exclusively (Windows); on a selected one the
                                 // whole selection drags as a group. Ctrl-clicks
@@ -1284,6 +1467,12 @@ export default function Desktop() {
                             icon: <FiGrid />,
                             onClick: () => { void organizeDesktop(); },
                         },
+                        {
+                            label: t('desktop.context.show_desktop'),
+                            icon: <FiMinimize2 />,
+                            shortcut: 'Win+D',
+                            onClick: () => { void invoke('toggle_show_desktop').catch(() => {}); },
+                        },
                         { separator: true },
                         // The system entries the native desktop menu offers
                         {
@@ -1337,20 +1526,6 @@ export default function Desktop() {
                             icon: <FiMoreHorizontal />,
                             onClick: () => { void runFileAction('open_with'); },
                         },
-                        {
-                            label: t('icon.rename'),
-                            icon: <FiEdit2 />,
-                            shortcut: 'F2',
-                            disabled: selectedIds().has(fileMenu()!.icon.id) && selectedIds().size !== 1,
-                            onClick: () => startRenameIcon(fileMenu()!.icon),
-                        },
-                        ...(!fileMenu()!.cellId ? [
-                            {
-                                label: t('icon.exclude_organize'),
-                                icon: excludedFromOrganize(fileMenu()!.icon) ? <FiCheck /> : undefined,
-                                onClick: () => toggleOrganizeExclusion(fileMenu()!.icon),
-                            },
-                        ] : []),
                         { separator: true } as const,
                         {
                             label: t('icon.cut'),
@@ -1363,12 +1538,26 @@ export default function Desktop() {
                             onClick: () => { void runFileAction('copy'); },
                         },
                         {
+                            label: t('icon.rename'),
+                            icon: <FiEdit2 />,
+                            shortcut: 'F2',
+                            disabled: selectedIds().has(fileMenu()!.icon.id) && selectedIds().size !== 1,
+                            onClick: () => startRenameIcon(fileMenu()!.icon),
+                        },
+                        {
                             label: t('icon.delete'),
                             icon: <FiTrash2 />,
                             destructive: true,
                             onClick: () => { void runFileAction('delete'); },
                         },
                         { separator: true } as const,
+                        ...(!fileMenu()!.cellId ? [
+                            {
+                                label: t('icon.exclude_organize'),
+                                icon: excludedFromOrganize(fileMenuPaths()) ? <FiCheck /> : undefined,
+                                onClick: () => toggleOrganizeExclusion(fileMenuPaths()),
+                            },
+                        ] : []),
                         {
                             label: t('icon.properties'),
                             icon: <FiFile />,
@@ -1396,8 +1585,17 @@ export default function Desktop() {
             )}
 
             <Show when={historyOpen()}>
-                <div class="fixed inset-0 z-[20000] flex items-center justify-center bg-black/35" onMouseDown={() => setHistoryOpen(false)}>
-                    <section class="w-[min(28rem,calc(100vw-2rem))] max-h-[min(30rem,calc(100vh-2rem))] overflow-auto rounded-md border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-gray-800" onMouseDown={(event) => event.stopPropagation()}>
+                <div class="fixed inset-0 z-[20000] bg-black/35" onMouseDown={() => setHistoryOpen(false)}>
+                    <section
+                        class="w-[min(28rem,calc(100vw-2rem))] max-h-[min(30rem,calc(100vh-2rem))] overflow-auto rounded-md border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+                        style={historyPosition() ? {
+                            position: 'fixed',
+                            left: `${historyPosition()!.x}px`,
+                            top: `${historyPosition()!.y}px`,
+                            transform: 'translate(-50%, -50%)',
+                        } : undefined}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
                         <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
                             <div class="flex items-center gap-2 font-medium"><FiClock />{t('history.title')}</div>
                             <button class="p-1" title={t('settings.close')} onClick={() => setHistoryOpen(false)}><FiX /></button>
@@ -1434,6 +1632,10 @@ export default function Desktop() {
                 showFileExtensions={config()?.show_file_extensions ?? true}
                 onShowFileExtensionsChange={(show_file_extensions) =>
                     setConfig((p) => p ? { ...p, show_file_extensions } : p)
+                }
+                showShortcutExtensions={config()?.show_shortcut_extensions ?? false}
+                onShowShortcutExtensionsChange={(show_shortcut_extensions) =>
+                    setConfig((p) => p ? { ...p, show_shortcut_extensions } : p)
                 }
                 anchor={settingsAnchor()}
             />
@@ -1479,7 +1681,11 @@ export default function Desktop() {
                                 </Show>
                             </div>
                             <span class="text-xs text-center leading-tight line-clamp-2 max-w-full desktop-icon-label">
-                                {displayIconName(ds().icon, config()?.show_file_extensions ?? true)}
+                                {displayIconName(
+                                    ds().icon,
+                                    config()?.show_file_extensions ?? true,
+                                    config()?.show_shortcut_extensions ?? false,
+                                )}
                             </span>
                             {/* Group size badge, like Explorer's drag count */}
                             <Show when={ds().group.length > 1}>

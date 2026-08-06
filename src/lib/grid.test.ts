@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DeskConfig } from '@bindings/DeskConfig';
 import type { DesktopIcon } from '@bindings/DesktopIcon';
 import type { DesktopScan } from '@bindings/DesktopScan';
-import { GRID, allocateSlots, arrangeFreeIcons, displayIconName, displayName, reconcileConfig, snapToGrid, sortFreeIcons } from './grid';
+import { GRID, allocateSlots, arrangeFreeIcons, deduplicateConfigIcons, displayIconName, displayName, reconcileConfig, snapToGrid, sortFreeIcons } from './grid';
 
 const VIEWPORT = { width: 1920, height: 1080 };
 
@@ -21,6 +21,7 @@ function cfg(partial?: Partial<DeskConfig>): DeskConfig {
         ...partial,
         use_styled_file_menu: partial?.use_styled_file_menu ?? true,
         show_file_extensions: partial?.show_file_extensions ?? true,
+        show_shortcut_extensions: partial?.show_shortcut_extensions ?? false,
         excluded_from_organize: partial?.excluded_from_organize ?? [],
         desktop_overlay_opacity: partial?.desktop_overlay_opacity ?? 0.01,
     };
@@ -96,6 +97,13 @@ describe('reconcileConfig', () => {
         expect(result.free_icons).toHaveLength(1);
     });
 
+    it('removes explicitly moved external icons', () => {
+        const externalPath = 'D:\\elsewhere\\moved.txt';
+        const config = cfg({ free_icons: [icon(externalPath, 10, 6)] });
+        const result = reconcileConfig(config, scan([]), VIEWPORT, [externalPath]);
+        expect(result.free_icons).toHaveLength(0);
+    });
+
     it('does not re-add files already organized into a cell', () => {
         const path = 'C:\\Users\\me\\Desktop\\in-cell.txt';
         const config = cfg({
@@ -110,6 +118,76 @@ describe('reconcileConfig', () => {
         });
         const result = reconcileConfig(config, scan([path.toUpperCase()]), VIEWPORT);
         expect(result).toBe(config); // path match is case-insensitive \u922B?no change
+    });
+
+    it('removes duplicate paths across free icons, cells, and sub-cells', () => {
+        const path = 'C:\\Users\\me\\Desktop\\single.txt';
+        const free = icon(path, GRID.originX, GRID.originY);
+        const cellIcon = { ...icon(path, 0, 0), id: 'in-cell' };
+        const subIcon = { ...icon(path, 0, 0), id: 'in-sub-cell' };
+        const config = cfg({
+            free_icons: [free],
+            cells: [{
+                id: 'c1', title: 'Cell',
+                rect: { x: 500, y: 500, width: 320, height: 240 },
+                background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
+                sort_field: 'name', sort_direction: 'asc', hover_expand: true,
+                sub_cells: [{ id: 's1', title: 'Sub', icons: [subIcon] }],
+                active_sub: null, sub_style: 'Compact', show_title: true,
+                icons: [cellIcon],
+            }],
+        });
+
+        const result = reconcileConfig(config, scan([path]), VIEWPORT);
+        expect(result.free_icons).toEqual([free]);
+        expect(result.cells[0]!.icons).toEqual([]);
+        expect(result.cells[0]!.sub_cells[0]!.icons).toEqual([]);
+    });
+
+    it('treats slash variants of the same Windows path as one icon', () => {
+        const backslashPath = 'C:\\Users\\me\\Desktop\\slash-variant.txt';
+        const config = cfg({
+            free_icons: [
+                icon('C:/Users/me/Desktop/slash-variant.txt', GRID.originX, GRID.originY),
+                icon(backslashPath, GRID.originX + GRID.cellW, GRID.originY),
+            ],
+        });
+        const result = reconcileConfig(config, scan([backslashPath]), VIEWPORT);
+        expect(result.free_icons).toHaveLength(1);
+        expect(result.free_icons[0]!.path).toBe('C:/Users/me/Desktop/slash-variant.txt');
+    });
+
+    it('treats a Windows device path and its normal path as one icon', () => {
+        const normalPath = 'D:\\Desktop\\device-variant.txt';
+        const config = cfg({
+            free_icons: [
+                icon('\\\\?\\D:\\Desktop\\device-variant.txt', GRID.originX, GRID.originY),
+                icon(normalPath, GRID.originX + GRID.cellW, GRID.originY),
+            ],
+        });
+        const result = reconcileConfig(config, scan([normalPath], ['D:\\Desktop']), VIEWPORT);
+        expect(result.free_icons).toHaveLength(1);
+    });
+
+    it('keeps the preferred icon when resolving a duplicate path', () => {
+        const path = 'C:\\Users\\me\\Desktop\\renamed.txt';
+        const free = icon(path, GRID.originX, GRID.originY);
+        const selected = { ...icon(path, 0, 0), id: 'renamed-icon' };
+        const config = cfg({
+            free_icons: [free],
+            cells: [{
+                id: 'c1', title: 'Cell',
+                rect: { x: 500, y: 500, width: 320, height: 240 },
+                background_color: null, opacity: 0.85, layout: 'Grid', collapsed: false,
+                sort_field: 'name', sort_direction: 'asc', hover_expand: true,
+                sub_cells: [], active_sub: null, sub_style: 'Compact', show_title: true,
+                icons: [selected],
+            }],
+        });
+
+        const result = deduplicateConfigIcons(config, selected.id);
+        expect(result.free_icons).toEqual([]);
+        expect(result.cells[0]!.icons).toEqual([selected]);
     });
 
     it('assigns slots to sentinel (-1) icons without moving placed ones', () => {
@@ -161,6 +239,13 @@ describe('displayIconName', () => {
         };
         expect(displayIconName(folder, true)).toBe('archive.zip');
         expect(displayIconName(folder, false)).toBe('archive.zip');
+    });
+
+    it('controls shortcut extensions separately from other file extensions', () => {
+        const shortcut = icon('C:\\Users\\me\\Desktop\\DeskChan.lnk');
+        expect(displayIconName(shortcut, true, false)).toBe('DeskChan');
+        expect(displayIconName(shortcut, true, true)).toBe('DeskChan.lnk');
+        expect(displayIconName(shortcut, false, true)).toBe('DeskChan.lnk');
     });
 });
 

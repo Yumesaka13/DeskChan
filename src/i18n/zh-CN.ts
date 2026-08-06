@@ -52,6 +52,7 @@ export interface Translations {
     'desktop.context.personalize': string;
     'desktop.context.display_settings': string;
     'desktop.context.system_menu': string;
+    'desktop.context.show_desktop': string;
     'desktop.context.exit': string;
 
     // Organize categories (cell titles)
@@ -65,6 +66,7 @@ export interface Translations {
 
     // Toast messages
     'toast.load_config_failed': string;
+    'toast.scan_failed': string;
     'toast.open_file_failed': string;
     'toast.file_action_failed': string;
     'toast.rename_failed': string;
@@ -78,6 +80,8 @@ export interface Translations {
     'toast.export_failed': string;
     'toast.import_done': string;
     'toast.import_failed': string;
+    'confirm.delete_one': string;
+    'confirm.delete_many': string;
 
     // History
     'history.title': string;
@@ -92,6 +96,9 @@ export interface Translations {
     'history.file_copy': string;
     'history.file_delete': string;
     'history.file_rename': string;
+    'history.reposition': string;
+    'history.import': string;
+    'history.reset': string;
 
     // Defaults
     'default.cell_title': string;
@@ -107,6 +114,7 @@ export interface Translations {
     'settings.file_extensions_hide': string;
     'settings.file_menu_styled': string;
     'settings.file_menu_native': string;
+    'settings.shortcut_extensions': string;
     'settings.language': string;
     'settings.title': string;
     'settings.close': string;
@@ -176,6 +184,7 @@ export const zhCN: Translations = {
     'desktop.context.personalize': '个性化',
     'desktop.context.display_settings': '显示设置',
     'desktop.context.system_menu': '更多系统选项',
+    'desktop.context.show_desktop': '显示桌面',
     'desktop.context.exit': '退出 DeskChan',
 
     'organize.folders': '文件夹',
@@ -187,6 +196,7 @@ export const zhCN: Translations = {
     'organize.others': '其他',
 
     'toast.load_config_failed': '加载配置失败',
+    'toast.scan_failed': '扫描桌面失败，可在桌面右键菜单中刷新',
     'toast.open_file_failed': '打开文件失败',
     'toast.file_action_failed': '文件操作失败',
     'toast.rename_failed': '重命名失败',
@@ -200,6 +210,8 @@ export const zhCN: Translations = {
     'toast.export_failed': '导出失败',
     'toast.import_done': '配置已导入',
     'toast.import_failed': '导入失败，请检查文件是否有效',
+    'confirm.delete_one': '确定要将此项移入回收站吗？',
+    'confirm.delete_many': '确定要将选中项移入回收站吗？',
 
     'history.title': '操作历史',
     'history.empty': '暂无可撤销的操作',
@@ -213,6 +225,9 @@ export const zhCN: Translations = {
     'history.file_copy': '复制文件',
     'history.file_delete': '移入回收站',
     'history.file_rename': '重命名文件',
+    'history.reposition': '重排图标',
+    'history.import': '导入配置',
+    'history.reset': '重置配置',
 
     'default.cell_title': '格子',
     'default.sub_title': '子盒子',
@@ -226,6 +241,7 @@ export const zhCN: Translations = {
     'settings.file_extensions_hide': '隐藏',
     'settings.file_menu_styled': '美化菜单',
     'settings.file_menu_native': '原版菜单',
+    'settings.shortcut_extensions': '显示 .lnk 快捷方式扩展名',
     'settings.language': '语言',
     'settings.title': '设置',
     'settings.close': '关闭',

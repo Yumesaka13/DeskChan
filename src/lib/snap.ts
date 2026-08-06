@@ -66,8 +66,14 @@ export function snapResizeRect(
     options: ResizeSnapOptions,
 ): CellRect {
     const threshold = options.threshold ?? SNAP_THRESHOLD;
-    const verticalEdges = others.flatMap((o) => [o.x, o.x + o.width]);
-    const horizontalEdges = others.flatMap((o) => [o.y, o.y + o.height]);
+    const overlaps = (start: number, end: number, otherStart: number, otherEnd: number) =>
+        start < otherEnd && otherStart < end;
+    const verticalEdges = others
+        .filter((o) => overlaps(rect.y, rect.y + rect.height, o.y, o.y + o.height))
+        .flatMap((o) => [o.x, o.x + o.width]);
+    const horizontalEdges = others
+        .filter((o) => overlaps(rect.x, rect.x + rect.width, o.x, o.x + o.width))
+        .flatMap((o) => [o.y, o.y + o.height]);
     let { x, y, width, height } = rect;
 
     if (edges.w && !edges.e) {

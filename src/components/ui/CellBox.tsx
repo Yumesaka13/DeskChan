@@ -52,6 +52,7 @@ export interface CellBoxProps {
     onRenameIcon?: (icon: DesktopIconData, name: string) => void;
     onRenameIconCancel?: () => void;
     showFileExtensions?: boolean;
+    showShortcutExtensions?: boolean;
     /** Extra white contrast layer applied only within this cell. */
     desktopOverlayOpacity?: number;
     /** Called to rename the cell (double-click on the title) */
@@ -183,13 +184,20 @@ export default function CellBox(props: CellBoxProps) {
     const handleMouseDown = (e: MouseEvent) => {
         // Only start drag from title bar or empty area (not icons/controls)
         const target = e.target as HTMLElement;
-        if (target.closest('[data-icon]') || target.closest('button') || target.closest('input')) return;
+        if (target.closest('[data-icon]') || target.closest('button') || target.closest('input') || target.closest('[data-resize]')) return;
 
         if (target.closest('[data-icon-area]')) {
             props.onClearIconSelection?.();
             return;
         }
 
+        // The title bar sits INSIDE the container, and both bind this same
+        // handler. Without stopping propagation a title-bar mousedown runs
+        // it twice, registering two document-level listener pairs - the
+        // second mouseup then commits the move a second time and pushes a
+        // duplicate history entry (making Ctrl+Z appear dead on the first
+        // press).
+        e.stopPropagation();
         e.preventDefault();
         setIsDragging(true);
 
@@ -252,7 +260,7 @@ export default function CellBox(props: CellBoxProps) {
     // The curried handler triggers solid/reactivity, but every reactive read
     // happens at event time (rect snapshotted on mousedown, id on mouseup).
     // eslint-disable-next-line solid/reactivity
-    const startResize = (dir: ResizeEdges) => (e: MouseEvent) => {
+    const startResize = (dir: ResizeEdges) => (e: PointerEvent) => {
         if (e.button !== 0) return; // right/middle click must never resize
         e.stopPropagation();
         e.preventDefault();
@@ -264,8 +272,12 @@ export default function CellBox(props: CellBoxProps) {
         const r0 = { ...props.cell.rect };
         const snapRects = props.snapRects ?? [];
         let last = r0;
+        // The gesture can end OUTSIDE the window (pointer released over the
+        // taskbar); mouseup is then never delivered and `set_dragging` would
+        // stay stuck at true, disabling the Z-order polling loop.
+        let done = false;
 
-        const onMove = (ev: MouseEvent) => {
+        const onMove = (ev: PointerEvent) => {
             const dx = ev.clientX - startX;
             const dy = ev.clientY - startY;
             let { x, y, width, height } = r0;
@@ -293,19 +305,33 @@ export default function CellBox(props: CellBoxProps) {
             cellRef.style.width = `${width}px`;
             if (!displayCollapsed()) cellRef.style.height = `${height}px`;
         };
-        const onUp = () => {
+
+        const finish = () => {
+            if (done) return;
+            done = true;
             cancelResize?.();
-            if (last !== r0) props.onResize?.(props.cell.id, last);
+            // Value comparison - `last` is a fresh object after any move, so
+            // an identity check would commit (and push a history entry) even
+            // when nothing actually changed.
+            if (last.x !== r0.x || last.y !== r0.y || last.width !== r0.width || last.height !== r0.height) {
+                props.onResize?.(props.cell.id, last);
+            }
         };
+        const onUp = () => finish();
+
         cancelResize = () => {
             cancelResize = null;
             setIsResizing(false);
             invoke('set_dragging', { dragging: false }).catch(() => {});
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointerleave', finish);
+            window.removeEventListener('lostpointercapture', finish);
         };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+        window.addEventListener('pointerleave', finish);
+        window.addEventListener('lostpointercapture', finish);
     };
 
     // --- Context menus ---
@@ -636,6 +662,7 @@ export default function CellBox(props: CellBoxProps) {
                                     <DesktopIconComponent
                                         icon={icon}
                                         showFileExtensions={props.showFileExtensions}
+                                        showShortcutExtensions={props.showShortcutExtensions}
                                         listLayout={props.cell.layout === 'List'}
                                         class={props.cell.layout === 'List'
                                             ? 'w-full flex-row justify-start gap-2 px-2 py-1'
@@ -669,19 +696,19 @@ export default function CellBox(props: CellBoxProps) {
                     when={!displayCollapsed()}
                     fallback={
                         <>
-                            <div class="absolute inset-y-0 left-0 w-1.5 cursor-w-resize" onMouseDown={startResize({ w: true })} />
-                            <div class="absolute inset-y-0 right-0 w-1.5 cursor-e-resize" onMouseDown={startResize({ e: true })} />
+                            <div data-resize class="absolute inset-y-0 left-0 w-1.5 cursor-w-resize" onPointerDown={startResize({ w: true })} />
+                            <div data-resize class="absolute inset-y-0 right-0 w-1.5 cursor-e-resize" onPointerDown={startResize({ e: true })} />
                         </>
                     }
                 >
-                    <div class="absolute inset-x-2.5 top-0 h-1.5 cursor-n-resize" onMouseDown={startResize({ n: true })} />
-                    <div class="absolute inset-x-2.5 bottom-0 h-1.5 cursor-s-resize" onMouseDown={startResize({ s: true })} />
-                    <div class="absolute inset-y-2.5 left-0 w-1.5 cursor-w-resize" onMouseDown={startResize({ w: true })} />
-                    <div class="absolute inset-y-2.5 right-0 w-1.5 cursor-e-resize" onMouseDown={startResize({ e: true })} />
-                    <div class="absolute left-0 top-0 w-2.5 h-2.5 cursor-nw-resize" onMouseDown={startResize({ n: true, w: true })} />
-                    <div class="absolute right-0 top-0 w-2.5 h-2.5 cursor-ne-resize" onMouseDown={startResize({ n: true, e: true })} />
-                    <div class="absolute left-0 bottom-0 w-2.5 h-2.5 cursor-sw-resize" onMouseDown={startResize({ s: true, w: true })} />
-                    <div class="absolute right-0 bottom-0 w-2.5 h-2.5 cursor-se-resize" onMouseDown={startResize({ s: true, e: true })} />
+                    <div data-resize class="absolute inset-x-2.5 top-0 h-1.5 cursor-n-resize" onPointerDown={startResize({ n: true })} />
+                    <div data-resize class="absolute inset-x-2.5 bottom-0 h-1.5 cursor-s-resize" onPointerDown={startResize({ s: true })} />
+                    <div data-resize class="absolute inset-y-2.5 left-0 w-1.5 cursor-w-resize" onPointerDown={startResize({ w: true })} />
+                    <div data-resize class="absolute inset-y-2.5 right-0 w-1.5 cursor-e-resize" onPointerDown={startResize({ e: true })} />
+                    <div data-resize class="absolute left-0 top-0 w-2.5 h-2.5 cursor-nw-resize" onPointerDown={startResize({ n: true, w: true })} />
+                    <div data-resize class="absolute right-0 top-0 w-2.5 h-2.5 cursor-ne-resize" onPointerDown={startResize({ n: true, e: true })} />
+                    <div data-resize class="absolute left-0 bottom-0 w-2.5 h-2.5 cursor-sw-resize" onPointerDown={startResize({ s: true, w: true })} />
+                    <div data-resize class="absolute right-0 bottom-0 w-2.5 h-2.5 cursor-se-resize" onPointerDown={startResize({ s: true, e: true })} />
                 </Show>
             </div>
 
