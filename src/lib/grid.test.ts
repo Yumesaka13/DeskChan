@@ -18,6 +18,7 @@ function cfg(partial?: Partial<DeskConfig>): DeskConfig {
         auto_arrange: false,
         snap_to_grid: true,
         theme: 'auto',
+        wallpaper_tint: partial?.wallpaper_tint ?? false,
         ...partial,
         use_styled_file_menu: partial?.use_styled_file_menu ?? true,
         show_file_extensions: partial?.show_file_extensions ?? true,
