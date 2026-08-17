@@ -34,6 +34,8 @@ export interface DesktopIconProps {
     class?: string;
     iconClass?: string;
     labelClass?: string;
+    labelStyle?: { color?: string };
+    inputStyle?: { color?: string };
 }
 
 export default function DesktopIcon(props: DesktopIconProps) {
@@ -126,6 +128,7 @@ export default function DesktopIcon(props: DesktopIconProps) {
                             'text-gray-700 dark:text-gray-200',
                             props.labelClass,
                         )}
+                        style={props.labelStyle}
                     >
                         {displayName()}
                     </span>
@@ -150,6 +153,7 @@ export default function DesktopIcon(props: DesktopIconProps) {
                         'dark:bg-gray-900/95 dark:text-gray-100',
                         props.listLayout && 'text-left',
                     )}
+                    style={props.inputStyle}
                 />
             </Show>
         </div>

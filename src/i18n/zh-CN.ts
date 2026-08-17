@@ -100,6 +100,9 @@ export interface Translations {
 
     // Settings
     'settings.theme': string;
+    'settings.wallpaper_tint': string;
+    'settings.toggle_on': string;
+    'settings.toggle_off': string;
     'settings.desktop_opacity': string;
     'settings.file_menu': string;
     'settings.file_extensions': string;
@@ -219,6 +222,9 @@ export const zhCN: Translations = {
     'default.icon_name': '未知',
 
     'settings.theme': '主题',
+    'settings.wallpaper_tint': '根据壁纸自动着色',
+    'settings.toggle_on': '开启',
+    'settings.toggle_off': '关闭',
     'settings.desktop_opacity': '桌面遮罩透明度',
     'settings.file_menu': '文件右键菜单',
     'settings.file_extensions': '显示文件扩展名',

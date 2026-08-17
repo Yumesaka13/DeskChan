@@ -15,6 +15,7 @@ mod desktop;
 mod native_drag;
 mod path_security;
 mod shell_menu;
+mod wallpaper;
 #[cfg(target_os = "windows")]
 mod win32;
 mod window_manager;
@@ -115,6 +116,7 @@ pub fn run() {
             bindings::show_icon_menu,
             bindings::show_desktop_menu,
             bindings::open_settings,
+            wallpaper::get_wallpaper_color,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Tauri application");

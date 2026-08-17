@@ -92,6 +92,9 @@ export const enUS: Translations = {
     'default.icon_name': 'Unknown',
 
     'settings.theme': 'Theme',
+    'settings.wallpaper_tint': 'Wallpaper Auto Tint',
+    'settings.toggle_on': 'On',
+    'settings.toggle_off': 'Off',
     'settings.desktop_opacity': 'Desktop Overlay Opacity',
     'settings.file_menu': 'File Context Menu',
     'settings.file_extensions': 'File Name Extensions',

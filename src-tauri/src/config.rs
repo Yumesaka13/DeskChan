@@ -156,6 +156,9 @@ pub struct DeskConfig {
     pub snap_to_grid: bool,
     /// Theme: "light", "dark", "auto"
     pub theme: String,
+    /// If enabled, cell background tints follow the current wallpaper color.
+    #[serde(default)]
+    pub wallpaper_tint: bool,
     /// White desktop overlay opacity. A small non-zero value keeps WebView2
     /// receiving drag events while allowing users to brighten dark wallpapers.
     #[serde(default = "default_desktop_overlay_opacity")]
@@ -178,6 +181,7 @@ impl Default for DeskConfig {
             auto_arrange: true,
             snap_to_grid: true,
             theme: "auto".to_string(),
+            wallpaper_tint: false,
             desktop_overlay_opacity: default_desktop_overlay_opacity(),
         }
     }
