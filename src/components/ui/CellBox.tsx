@@ -26,6 +26,8 @@ import DesktopIconComponent from './DesktopIcon';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import { FiCheck, FiPlus, FiTrash2 } from 'solid-icons/fi';
 import { BsCaretDownFill, BsCaretUpFill } from 'solid-icons/bs';
+import { adaptWallpaperTint, pickReadableTextColor } from '~/lib/wallpaper';
+import { useTheme } from '~/lib/theme';
 
 export interface CellBoxProps {
     /** The cell data */
@@ -55,6 +57,9 @@ export interface CellBoxProps {
     showShortcutExtensions?: boolean;
     /** Extra white contrast layer applied only within this cell. */
     desktopOverlayOpacity?: number;
+    /** Wallpaper-derived tint color for cells when tint mode is enabled. */
+    wallpaperTintColor?: string | null;
+    wallpaperTintEnabled?: boolean;
     /** Called to rename the cell (double-click on the title) */
     onRename: (id: string, title: string) => void;
     /** Called to create a new sub-box tab */
@@ -133,6 +138,7 @@ function RenameInput(props: {
  */
 export default function CellBox(props: CellBoxProps) {
     const { t } = useI18n();
+    const { resolvedTheme } = useTheme();
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [subMenu, setSubMenu] = createSignal<{ x: number; y: number; subId: string } | null>(null);
     /** Which title is being renamed: the cell itself or a sub-box tab. */
@@ -452,9 +458,25 @@ export default function CellBox(props: CellBoxProps) {
         cellRef.removeEventListener('drop', handleDrop);
     });
 
+    const tintBaseColor = createMemo(() => {
+        if (!props.wallpaperTintEnabled || !props.wallpaperTintColor) return null;
+        return adaptWallpaperTint(props.wallpaperTintColor, resolvedTheme());
+    });
+
+    const tintTextColor = createMemo(() => {
+        if (!tintBaseColor()) return null;
+        return pickReadableTextColor(tintBaseColor()!);
+    });
+    const defaultTextColor = createMemo(() => {
+        if (tintTextColor()) return tintTextColor()!;
+        return resolvedTheme() === 'dark' ? '#e5e7eb' : '#4b5563';
+    });
+
     // Background style with optional custom color
     const bgStyle = createMemo(() => {
-        const bg = props.cell.background_color;
+        const explicitBg = props.cell.background_color;
+        const wallpaperTint = tintBaseColor();
+        const bg = explicitBg ?? wallpaperTint;
         const opacity = props.cell.opacity;
         const overlay = Math.max(0, Math.min(props.desktopOverlayOpacity ?? 0, 0.5));
         const overlayStyle = overlay > 0
@@ -463,9 +485,14 @@ export default function CellBox(props: CellBoxProps) {
         if (bg) {
             // Solid style objects take kebab-case CSS property names -
             // camelCase keys are silently ignored by style.setProperty.
-            return { 'background-color': bg, opacity, ...overlayStyle };
+            return {
+                'background-color': bg,
+                opacity,
+                transition: 'background-color 260ms ease, color 220ms ease, opacity 220ms ease',
+                ...overlayStyle,
+            };
         }
-        return { opacity, ...overlayStyle };
+        return { opacity, transition: 'background-color 260ms ease, color 220ms ease, opacity 220ms ease', ...overlayStyle };
     });
 
     /** One tab of the strip: the implicit own tab (subId null) or a sub-box.
@@ -511,6 +538,7 @@ export default function CellBox(props: CellBoxProps) {
                             ? 'text-gray-900 dark:text-gray-50 font-semibold'
                             : 'text-gray-400 dark:text-gray-500',
                     )}
+                    style={{ color: defaultTextColor() }}
                 >
                     {label}
                     <Show when={active()}>
@@ -566,7 +594,10 @@ export default function CellBox(props: CellBoxProps) {
                             !displayCollapsed() && 'border-b border-gray-200/50 dark:border-gray-600/30',
                             props.titleClass,
                         )}
-                        style={{ height: `${CELL_TITLEBAR_H}px` }}
+                        style={{
+                            height: `${CELL_TITLEBAR_H}px`,
+                            color: defaultTextColor(),
+                        }}
                         onMouseDown={handleMouseDown}
                     >
                         <Show
@@ -595,7 +626,10 @@ export default function CellBox(props: CellBoxProps) {
                         </Show>
                         {/* Icon count badge - visible when rolled up */}
                         {displayCollapsed() && (
-                            <span class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums">
+                            <span
+                                class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums"
+                                style={{ color: defaultTextColor() }}
+                            >
                                 {totalIconCount(props.cell)}
                             </span>
                         )}
@@ -609,6 +643,7 @@ export default function CellBox(props: CellBoxProps) {
                                 'fluent-icon-btn flex-shrink-0',
                                 'text-gray-500 dark:text-gray-300',
                             )}
+                            style={{ color: defaultTextColor() }}
                             title={t('cell.hover_expand')}
                         >
                             {props.cell.hover_expand ? (
@@ -652,7 +687,10 @@ export default function CellBox(props: CellBoxProps) {
                     )}
                 >
                     {activeIcons(props.cell).length === 0 ? (
-                        <div class="flex items-center justify-center h-full text-xs text-gray-400 dark:text-gray-500 italic">
+                        <div
+                            class="flex items-center justify-center h-full text-xs text-gray-400 dark:text-gray-500 italic"
+                            style={tintTextColor() ? { color: tintTextColor()! } : undefined}
+                        >
                             {t('cell.empty_hint')}
                         </div>
                     ) : (
@@ -670,6 +708,8 @@ export default function CellBox(props: CellBoxProps) {
                                         labelClass={props.cell.layout === 'List'
                                             ? 'flex-1 max-w-none text-left line-clamp-1'
                                             : undefined}
+                                        labelStyle={tintTextColor() ? { color: tintTextColor()! } : undefined}
+                                        inputStyle={tintTextColor() ? { color: tintTextColor()! } : undefined}
                                         selected={props.selectedIconIds?.has(icon.id) ?? false}
                                         editing={props.renamingIconId === icon.id}
                                         onSelect={(selected, event) => props.onSelectIcon?.(props.cell.id, selected, event)}

@@ -24,6 +24,8 @@ export interface SettingsDialogProps {
     /** White overlay opacity for improving contrast on dark wallpapers. */
     desktopOverlayOpacity: number;
     onDesktopOverlayOpacityChange: (value: number) => void;
+    wallpaperTintEnabled: boolean;
+    onWallpaperTintChange: (value: boolean) => void;
     useStyledFileMenu: boolean;
     onUseStyledFileMenuChange: (value: boolean) => void;
     showFileExtensions: boolean;
@@ -199,6 +201,15 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                                         label={t(`theme.${tVal}` as 'theme.light')}
                                     />
                                 ))}
+                            </div>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-sm font-medium text-gray-600 dark:text-gray-300">
+                                {t('settings.wallpaper_tint')}
+                            </label>
+                            <div class="flex gap-2">
+                                <OptionButton active={props.wallpaperTintEnabled} onClick={() => props.onWallpaperTintChange(true)} label={t('settings.toggle_on')} />
+                                <OptionButton active={!props.wallpaperTintEnabled} onClick={() => props.onWallpaperTintChange(false)} label={t('settings.toggle_off')} />
                             </div>
                         </div>
                         <div class="space-y-1.5">

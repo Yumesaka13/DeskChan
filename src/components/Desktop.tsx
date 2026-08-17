@@ -31,6 +31,7 @@ import toast from 'solid-toast';
 export default function Desktop() {
     const { t } = useI18n();
     const [config, setConfig] = createSignal<DeskConfig | null>(null);
+    const [wallpaperTintColor, setWallpaperTintColor] = createSignal<string | null>(null);
     const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
     const [settingsOpen, setSettingsOpen] = createSignal(false);
     const [settingsAnchor, setSettingsAnchor] = createSignal<{ x: number; y: number } | null>(null);
@@ -645,6 +646,32 @@ export default function Desktop() {
             window.removeEventListener('pointerleave', handoffNativeDrag);
             window.removeEventListener('pointercancel', handoffNativeDrag);
             window.removeEventListener('lostpointercapture', handoffNativeDrag);
+        });
+    });
+
+    // -- Wallpaper tint (supports slideshow wallpapers via periodic polling) --
+    createEffect(() => {
+        const enabled = config()?.wallpaper_tint ?? false;
+        if (!enabled) {
+            setWallpaperTintColor(null);
+            return;
+        }
+
+        let cancelled = false;
+        const refresh = async () => {
+            try {
+                const color = await invoke<string>('get_wallpaper_color');
+                if (!cancelled) setWallpaperTintColor(color || null);
+            } catch {
+                if (!cancelled) setWallpaperTintColor((prev) => prev ?? null);
+            }
+        };
+
+        void refresh();
+        const id = window.setInterval(() => { void refresh(); }, 2500);
+        onCleanup(() => {
+            cancelled = true;
+            window.clearInterval(id);
         });
     });
 
@@ -1277,6 +1304,8 @@ export default function Desktop() {
                         showFileExtensions={config()?.show_file_extensions ?? true}
                         showShortcutExtensions={config()?.show_shortcut_extensions ?? false}
                         desktopOverlayOpacity={config()?.desktop_overlay_opacity ?? 0.01}
+                        wallpaperTintColor={config()?.wallpaper_tint ? wallpaperTintColor() : null}
+                        wallpaperTintEnabled={config()?.wallpaper_tint ?? false}
                         onRename={(id, title) => updateCell(id, (c) => ({ ...c, title }))}
                         onCreateSub={createSubCell}
                         onSelectSub={(id, subId) =>
@@ -1642,6 +1671,10 @@ export default function Desktop() {
                 desktopOverlayOpacity={config()?.desktop_overlay_opacity ?? 0.01}
                 onDesktopOverlayOpacityChange={(desktop_overlay_opacity) =>
                     setConfig((p) => p ? { ...p, desktop_overlay_opacity } : p)
+                }
+                wallpaperTintEnabled={config()?.wallpaper_tint ?? false}
+                onWallpaperTintChange={(wallpaper_tint) =>
+                    setConfig((p) => p ? { ...p, wallpaper_tint } : p)
                 }
                 useStyledFileMenu={config()?.use_styled_file_menu ?? true}
                 onUseStyledFileMenuChange={(use_styled_file_menu) =>
