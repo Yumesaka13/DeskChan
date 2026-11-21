@@ -9,6 +9,7 @@ use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 mod win {
     use crate::win32::Guid;
+    use crate::win32::{point_is_in_window, GetCursorPos, Point};
     use std::ffi::c_void;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -90,6 +91,7 @@ mod win {
     struct DropSource {
         vtbl: *const DropSourceVtbl,
         refs: AtomicU32,
+        desktop_hwnd: isize,
     }
 
     #[repr(C)]
@@ -143,6 +145,11 @@ mod win {
             ok_effects: u32,
             effect: *mut u32,
         ) -> i32;
+    }
+
+    extern "system" {
+        fn GetAsyncKeyState(key: i32) -> i16;
+        fn ReleaseCapture() -> i32;
     }
 
     extern "system" {
@@ -407,14 +414,20 @@ mod win {
     }
 
     unsafe extern "system" fn source_query_continue_drag(
-        _this: *mut DropSource,
+        this: *mut DropSource,
         escape_pressed: i32,
         key_state: u32,
     ) -> i32 {
         if escape_pressed != 0 {
             DRAGDROP_S_CANCEL
         } else if key_state & MK_LBUTTON == 0 {
-            DRAGDROP_S_DROP
+            // The overlay accepts inbound OLE drops too. Do not interpret an
+            // outbound drag that returned to DeskChan as a new file import.
+            if cursor_over_desktop((*this).desktop_hwnd) {
+                DRAGDROP_S_CANCEL
+            } else {
+                DRAGDROP_S_DROP
+            }
         } else {
             S_OK
         }
@@ -447,24 +460,29 @@ mod win {
         give_feedback: source_give_feedback,
     };
 
-    pub fn drag_files(paths: Vec<PathBuf>) -> Result<u32, String> {
-        if paths.is_empty() {
-            return Err("no files to drag".into());
-        }
+    fn cursor_over_desktop(hwnd: isize) -> bool {
+        let mut point = Point::default();
+        unsafe { GetCursorPos(&mut point) != 0 && point_is_in_window(hwnd, point) }
+    }
+
+    pub fn drag_files(hwnd: isize, paths: Vec<PathBuf>) -> Result<Option<u32>, String> {
         let paths = paths
             .into_iter()
             .map(|path| path.to_string_lossy().to_string())
             .collect::<Vec<_>>();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = unsafe { do_drag_files(paths) };
-            let _ = tx.send(result);
-        });
-        rx.recv().map_err(|e| e.to_string())?
+        unsafe { do_drag_files(hwnd, paths) }
     }
 
-    unsafe fn do_drag_files(paths: Vec<String>) -> Result<u32, String> {
+    unsafe fn do_drag_files(hwnd: isize, paths: Vec<String>) -> Result<Option<u32>, String> {
+        const VK_LBUTTON: i32 = 1;
+        if cursor_over_desktop(hwnd) {
+            return Ok(None);
+        }
+        if GetAsyncKeyState(VK_LBUTTON) >= 0 {
+            return Ok(Some(0));
+        }
         let _ole = OleGuard::init()?;
+        ReleaseCapture();
         let data = Box::into_raw(Box::new(DataObject {
             vtbl: &DATA_OBJECT_VTBL,
             refs: AtomicU32::new(1),
@@ -473,6 +491,7 @@ mod win {
         let source = Box::into_raw(Box::new(DropSource {
             vtbl: &DROP_SOURCE_VTBL,
             refs: AtomicU32::new(1),
+            desktop_hwnd: hwnd,
         }));
         let mut effect = 0;
         let hr = DoDragDrop(
@@ -483,22 +502,51 @@ mod win {
         );
         data_release(data);
         source_release(source);
-        if hr >= 0 {
-            Ok(effect)
+        if hr == DRAGDROP_S_DROP {
+            Ok(Some(effect))
+        } else if hr >= 0 {
+            Ok(Some(0))
         } else {
             Err(format!("DoDragDrop failed: 0x{:08x}", hr as u32))
         }
     }
 }
 
-pub fn drag_files(paths: Vec<PathBuf>) -> Result<u32, String> {
+pub fn drag_files(window: tauri::WebviewWindow, paths: Vec<PathBuf>) -> Result<Option<u32>, String> {
     #[cfg(target_os = "windows")]
     {
-        win::drag_files(paths)
+        let hwnd = window.hwnd().map_err(|err| err.to_string())?.0 as isize;
+        let (send, receive) = std::sync::mpsc::channel();
+        // The OLE modal loop takes over the pointer from WebView2 on the
+        // window thread. The caller waits on a blocking worker.
+        window
+            .run_on_main_thread(move || {
+                let _ = send.send(win::drag_files(hwnd, paths));
+            })
+            .map_err(|err| err.to_string())?;
+        receive.recv().map_err(|err| err.to_string())?
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = paths;
+        let _ = (window, paths);
         Err("native file drag is only supported on Windows".into())
+    }
+}
+
+pub fn is_desktop_point(window: &tauri::WebviewWindow, x: i32, y: i32) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::win32::{point_is_in_window, ClientToScreen, Point};
+        let hwnd = window.hwnd().map_err(|err| err.to_string())?.0 as isize;
+        let mut point = Point { x, y };
+        if unsafe { ClientToScreen(hwnd, &mut point) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(point_is_in_window(hwnd, point))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, x, y);
+        Ok(true)
     }
 }

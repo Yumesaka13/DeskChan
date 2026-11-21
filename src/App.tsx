@@ -1,6 +1,7 @@
 import { I18nProvider } from './i18n';
 import { ThemeProvider } from './lib/theme';
-import Desktop from './components/Desktop';
+import Desktop from './features/desktop/Desktop';
+import { NativeBackdropProvider } from './platform/NativeBackdrops';
 
 /**
  * Root application component.
@@ -10,7 +11,9 @@ export default function App() {
     return (
         <I18nProvider>
             <ThemeProvider>
-                <Desktop />
+                <NativeBackdropProvider>
+                    <Desktop />
+                </NativeBackdropProvider>
             </ThemeProvider>
         </I18nProvider>
     );

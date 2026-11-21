@@ -12,6 +12,13 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
 // Common user32 declarations shared across modules.
 extern "system" {
     pub fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
@@ -31,6 +38,15 @@ extern "system" {
         -> isize;
     pub fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
     pub fn IsWindowVisible(hwnd: isize) -> i32;
+    pub fn GetCursorPos(point: *mut Point) -> i32;
+    pub fn ClientToScreen(hwnd: isize, point: *mut Point) -> i32;
+    pub fn WindowFromPoint(point: Point) -> isize;
+    pub fn GetAncestor(hwnd: isize, flags: u32) -> isize;
+}
+
+pub fn point_is_in_window(hwnd: isize, point: Point) -> bool {
+    const GA_ROOT: u32 = 2;
+    unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) == hwnd }
 }
 
 extern "system" {

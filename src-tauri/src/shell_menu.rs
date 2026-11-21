@@ -87,7 +87,10 @@ pub fn forward_menu_msg(msg: u32, wparam: usize, lparam: isize) -> Option<isize>
 /// Show the native DESKTOP BACKGROUND context menu (view/sort/refresh,
 /// personalize, display settings, graphics-vendor panels ...) at the cursor.
 #[cfg(target_os = "windows")]
-pub fn show_desktop(window: tauri::WebviewWindow) -> Result<(), String> {
+pub fn show_desktop(
+    window: tauri::WebviewWindow,
+    extra_items: Vec<String>,
+) -> Result<Option<u32>, String> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let hwnd = match window.window_handle().ok().map(|h| match h.as_raw() {
@@ -102,16 +105,17 @@ pub fn show_desktop(window: tauri::WebviewWindow) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     window
         .run_on_main_thread(move || {
-            let _ = tx.send(unsafe { menu_ffi::show_background_menu(hwnd) });
+            let _ = tx.send(unsafe { menu_ffi::show_background_menu(hwnd, &extra_items) });
         })
         .map_err(|e| e.to_string())?;
-    rx.recv()
-        .map_err(|_| "menu closure dropped".to_string())?
-        .map(|_| ())
+    rx.recv().map_err(|_| "menu closure dropped".to_string())?
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn show_desktop(_window: tauri::WebviewWindow) -> Result<(), String> {
+pub fn show_desktop(
+    _window: tauri::WebviewWindow,
+    _extra_items: Vec<String>,
+) -> Result<Option<u32>, String> {
     Err("native context menu not supported on this platform".into())
 }
 
@@ -166,6 +170,7 @@ mod menu_ffi {
     const MF_SEPARATOR: u32 = 0x800;
     const TPM_RETURNCMD: u32 = 0x100;
     const TPM_RIGHTBUTTON: u32 = 0x2;
+    const TPM_VERPOSANIMATION: u32 = 0x1000;
     const SW_SHOWNORMAL: i32 = 1;
     const WM_NULL: u32 = 0;
 
@@ -217,6 +222,8 @@ mod menu_ffi {
         fn GetCursorPos(p: *mut Point) -> i32;
         fn SetForegroundWindow(hwnd: isize) -> i32;
         fn PostMessageW(hwnd: isize, msg: u32, w: usize, l: isize) -> i32;
+        fn SetLastError(error: u32);
+        fn GetLastError() -> u32;
     }
 
     // -- IContextMenu2/3 menu-message forwarding -------------------------
@@ -492,7 +499,10 @@ mod menu_ffi {
     /// Show the stable desktop-folder background menu owned by DeskChan.
     /// This avoids depending on Explorer's hidden desktop view and foreground
     /// window state, at the cost of omitting some view-specific commands.
-    pub unsafe fn show_background_menu(hwnd: isize) -> Result<Option<u32>, String> {
+    pub unsafe fn show_background_menu(
+        hwnd: isize,
+        extra_items: &[String],
+    ) -> Result<Option<u32>, String> {
         extern "system" {
             fn SHGetDesktopFolder(folder: *mut *mut c_void) -> i32;
         }
@@ -514,7 +524,7 @@ mod menu_ffi {
             return Err("CreateViewObject(IContextMenu) failed".into());
         }
         let context_menu = ComPtr(menu_ptr);
-        track_menu(hwnd, &context_menu, &[])
+        track_menu(hwnd, &context_menu, extra_items)
     }
 
     /// Build the popup for an IContextMenu, run the modal tracking loop at
@@ -568,16 +578,21 @@ mod menu_ffi {
         let mut pt = Point { x: 0, y: 0 };
         GetCursorPos(&mut pt);
         SetForegroundWindow(hwnd);
+        SetLastError(0);
         let cmd = TrackPopupMenuEx(
             hmenu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_VERPOSANIMATION,
             pt.x,
             pt.y,
             hwnd,
             std::ptr::null_mut(),
         ) as u32;
+        let error = if cmd == 0 { GetLastError() } else { 0 };
         PostMessageW(hwnd, WM_NULL, 0, 0);
 
+        if error != 0 {
+            return Err(std::io::Error::from_raw_os_error(error as i32).to_string());
+        }
         if cmd == 0 {
             return Ok(None); // dismissed
         }

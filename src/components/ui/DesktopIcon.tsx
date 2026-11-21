@@ -1,168 +1,94 @@
-/**
- * DesktopIcon - a single file icon, used both free on the desktop and inside
- * cells. Native-like behavior: single click selects, double click opens.
- *
- * The shell icon comes from Rust (256/48px source, see icon-cache) and is
- * displayed at 48px CSS like Windows' medium icons - downscaling a large
- * source keeps it crisp at any DPI. `createResource` keeps the icon URL
- * across SolidJS re-renders triggered by config changes.
- */
-import { createEffect, createResource, createSignal, Show } from 'solid-js';
-import { cn } from '~/lib/utils';
-import { fetchIcon } from '~/lib/icon-cache';
-import { displayIconName } from '~/lib/grid';
-import type { DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
+/** File tile for the desktop grid and folder list views. */
+import { createResource, Show } from 'solid-js';
 import { FiFile } from 'solid-icons/fi';
+import type { DesktopIcon as Icon } from '@bindings/DesktopIcon';
+import { useI18n } from '~/i18n';
+import { fetchIcon, fileIconSize } from '~/lib/icon-cache';
+import { displayIconName } from '~/lib/grid';
+import { cn } from '~/lib/utils';
+import RenameInput from './RenameInput';
 
-export interface DesktopIconProps {
-    icon: DesktopIconData;
-    /** Double-click (native behavior) - opens the file */
-    onOpen: (icon: DesktopIconData) => void;
-    /** Single click - select (event exposes ctrl/meta for multi-select) */
-    onSelect?: (icon: DesktopIconData, e: MouseEvent) => void;
-    selected?: boolean;
-    showFileExtensions?: boolean;
-    showShortcutExtensions?: boolean;
-    /** Compact row presentation used by cell list layout. */
+interface DesktopIconProps {
+    icon: Icon;
+    onOpen: (icon: Icon) => void;
+    onSelect: (icon: Icon, event: MouseEvent) => void;
+    onDragStart: (iconId: string, event: PointerEvent) => void;
+    onNativeMenu: (icon: Icon, event: MouseEvent) => void;
+    onRename: (icon: Icon, name: string) => void | Promise<void>;
+    onRenameCancel: () => void;
+    selected: boolean;
+    showFileExtensions: boolean;
+    showShortcutExtensions: boolean;
     listLayout?: boolean;
-    onDragStart?: (iconId: string, e: PointerEvent) => void;
-    /** Right-click - shows the native Windows shell menu for the file */
-    onNativeMenu?: (icon: DesktopIconData, event: MouseEvent) => void;
-    /** Inline Explorer-style rename state, usually entered by F2 or menu. */
     editing?: boolean;
-    onRename?: (icon: DesktopIconData, name: string) => void;
-    onRenameCancel?: () => void;
     class?: string;
     iconClass?: string;
     labelClass?: string;
-    labelStyle?: { color?: string };
-    inputStyle?: { color?: string };
 }
 
 export default function DesktopIcon(props: DesktopIconProps) {
-    const [iconUrl] = createResource(() => props.icon.path, fetchIcon);
-    const displayName = () => displayIconName(
-        props.icon,
-        props.showFileExtensions ?? true,
-        props.showShortcutExtensions ?? false,
+    const { t } = useI18n();
+    const [image] = createResource(
+        () => ({ path: props.icon.path, sizePx: fileIconSize(props.listLayout) }),
+        ({ path, sizePx }) => fetchIcon(path, sizePx),
     );
-    const [draftName, setDraftName] = createSignal('');
-    let inputRef!: HTMLInputElement;
-    let cancelingRename = false;
-
-    createEffect(() => {
-        if (!props.editing) return;
-        const name = displayName();
-        setDraftName(name);
-        queueMicrotask(() => {
-            inputRef?.focus();
-            const dot = name.lastIndexOf('.');
-            inputRef?.setSelectionRange(0, dot > 0 ? dot : name.length);
-        });
-    });
-
-    const commitRename = () => {
-        if (cancelingRename) return;
-        const next = draftName().trim();
-        if (next && next !== displayName()) props.onRename?.(props.icon, next);
-        else props.onRenameCancel?.();
-    };
-    const cancelRename = () => {
-        cancelingRename = true;
-        props.onRenameCancel?.();
-        queueMicrotask(() => { cancelingRename = false; });
-    };
+    const name = () => displayIconName(props.icon, props.showFileExtensions, props.showShortcutExtensions);
 
     return (
         <div
-            class={cn(
-                'flex gap-0.5 p-1 rounded',
-                props.listLayout ? 'flex-row items-center' : 'flex-col items-center',
-                'cursor-default select-none',
-                'border border-transparent',
-                'hover:bg-blue-400/15 hover:border-blue-300/20',
-                props.selected && 'bg-blue-400/30 border-blue-300/40',
-                'w-18 group relative',
-                props.class,
-            )}
-            onClick={(e) => {
-                e.stopPropagation();
-                if (!props.editing) props.onSelect?.(props.icon, e);
+            class={cn('file-tile', props.listLayout && 'file-tile-row', props.class)}
+            classList={{ 'file-tile-selected': props.selected }}
+            role="button"
+            aria-label={name()}
+            aria-pressed={props.selected}
+            tabIndex={props.editing ? -1 : 0}
+            title={name()}
+            onClick={(event) => {
+                event.stopPropagation();
+                if (!props.editing) props.onSelect(props.icon, event);
             }}
-            onDblClick={(e) => {
-                e.stopPropagation();
+            onDblClick={(event) => {
+                event.stopPropagation();
                 if (!props.editing) props.onOpen(props.icon);
             }}
-            onContextMenu={(e) => {
-                if (props.onNativeMenu) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    props.onNativeMenu(props.icon, e);
+            onKeyDown={(event) => {
+                if (props.editing) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (event.key === 'Enter') props.onOpen(props.icon);
+                    else event.currentTarget.click();
                 }
             }}
-            onPointerDown={(e) => {
-                if (!props.editing && props.onDragStart && e.button === 0) {
-                    e.preventDefault();
-                    props.onDragStart(props.icon.id, e);
-                }
+            onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onNativeMenu(props.icon, event);
             }}
-            title={displayName()}
+            onPointerDown={(event) => {
+                if (props.editing || event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.focus({ preventScroll: true });
+                props.onDragStart(props.icon.id, event);
+            }}
         >
-            <Show when={!props.listLayout}>
-                <div class={cn('w-12 h-12 flex items-center justify-center overflow-hidden', props.iconClass)}>
-                    <Show when={iconUrl()} fallback={<FiFile class="text-3xl text-gray-400 dark:text-gray-500" />}>
-                        <img
-                            src={iconUrl()!}
-                            alt=""
-                            class="w-full h-full object-contain"
-                            draggable="false"
-                        />
-                    </Show>
-                </div>
-            </Show>
+            <div class={cn('file-tile-art', props.iconClass)} aria-hidden="true">
+                <Show when={image()} fallback={<FiFile />}>
+                    {(url) => <img src={url()} alt="" draggable="false" />}
+                </Show>
+            </div>
             <Show
                 when={props.editing}
-                fallback={
-                    <span
-                        class={cn(
-                            'text-xs text-center leading-tight break-words max-w-full',
-                            // A selected icon mirrors Explorer's focused-label
-                            // behavior: reveal the complete name instead of keeping
-                            // the compact two-line desktop label truncation.
-                            props.selected ? 'line-clamp-none' : 'line-clamp-2',
-                            'text-gray-700 dark:text-gray-200',
-                            props.labelClass,
-                        )}
-                        style={props.labelStyle}
-                    >
-                        {displayName()}
-                    </span>
-                }
+                fallback={<span class={cn('file-tile-name', props.labelClass)}>{name()}</span>}
             >
-                <input
-                    ref={inputRef}
-                    value={draftName()}
-                    onInput={(e) => setDraftName(e.currentTarget.value)}
-                    onBlur={commitRename}
-                    onClick={(e) => e.stopPropagation()}
-                    onDblClick={(e) => e.stopPropagation()}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                        e.stopPropagation();
-                        if (e.key === 'Enter') commitRename();
-                        if (e.key === 'Escape') cancelRename();
-                    }}
-                    class={cn(
-                        'w-full min-w-0 rounded-sm border border-blue-500 bg-white/95 px-1',
-                        'text-xs leading-tight text-center text-gray-900 outline-none',
-                        'dark:bg-gray-900/95 dark:text-gray-100',
-                        props.listLayout && 'text-left',
-                    )}
-                    style={props.inputStyle}
+                <RenameInput
+                    label={t('icon.rename')}
+                    selectStem
+                    value={name()}
+                    onCommit={(value) => props.onRename(props.icon, value)}
+                    onCancel={props.onRenameCancel}
                 />
             </Show>
         </div>
     );
 }
-
-export type { DesktopIconData };

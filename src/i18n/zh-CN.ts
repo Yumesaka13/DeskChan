@@ -33,6 +33,9 @@ export interface Translations {
     // Desktop
     'desktop.empty': string;
     'desktop.context.new_cell': string;
+    'desktop.context.new': string;
+    'desktop.context.deskchan': string;
+    'desktop.context.undo': string;
     'desktop.context.refresh': string;
     'desktop.context.paste': string;
     'desktop.context.paste_copy': string;
@@ -115,6 +118,7 @@ export interface Translations {
     'settings.toggle_off': string;
     'settings.desktop_opacity': string;
     'settings.file_menu': string;
+    'toast.native_menu_failed': string;
     'settings.file_extensions': string;
     'settings.file_extensions_show': string;
     'settings.file_extensions_hide': string;
@@ -122,6 +126,22 @@ export interface Translations {
     'settings.file_menu_native': string;
     'settings.shortcut_extensions': string;
     'settings.language': string;
+    'settings.startup': string;
+    'settings.startup_normal': string;
+    'settings.startup_elevated': string;
+    'settings.startup_loading': string;
+    'settings.startup_unavailable': string;
+    'settings.startup_hint': string;
+    'settings.startup_failed': string;
+    'settings.updates': string;
+    'settings.update_check': string;
+    'settings.update_checking': string;
+    'settings.update_current': string;
+    'settings.update_available': string;
+    'settings.update_install': string;
+    'settings.update_installing': string;
+    'settings.update_check_failed': string;
+    'settings.update_install_failed': string;
     'settings.title': string;
     'settings.close': string;
     'settings.tab.general': string;
@@ -171,13 +191,16 @@ export const zhCN: Translations = {
 
     'desktop.empty': '右键创建新格子开始使用',
     'desktop.context.new_cell': '新建格子',
+    'desktop.context.new': '新建',
+    'desktop.context.deskchan': 'DeskChan 工具',
+    'desktop.context.undo': '撤销',
     'desktop.context.refresh': '刷新',
     'desktop.context.paste': '粘贴到桌面',
     'desktop.context.paste_copy': '复制到此处',
     'desktop.context.paste_move': '移动到此处',
     'desktop.context.settings': '设置',
     'desktop.context.organize': '一键整理',
-    'desktop.context.arrangement': '排列方式',
+    'desktop.context.arrangement': '查看',
     'desktop.context.arrange_auto': '自动排列',
     'desktop.context.arrange_snap': '对齐到网格',
     'desktop.context.sort_by': '排序依据',
@@ -189,7 +212,7 @@ export const zhCN: Translations = {
     'desktop.context.sort_descending': '降序',
     'desktop.context.personalize': '个性化',
     'desktop.context.display_settings': '显示设置',
-    'desktop.context.system_menu': '更多系统选项',
+    'desktop.context.system_menu': '显示更多选项',
     'desktop.context.show_desktop': '显示桌面',
     'desktop.context.exit': '退出 DeskChan',
 
@@ -247,14 +270,31 @@ export const zhCN: Translations = {
     'settings.toggle_on': '开启',
     'settings.toggle_off': '关闭',
     'settings.desktop_opacity': '桌面遮罩透明度',
-    'settings.file_menu': '文件右键菜单',
+    'settings.file_menu': '桌面与文件右键菜单',
+    'toast.native_menu_failed': '无法打开 Windows 系统菜单。',
     'settings.file_extensions': '显示文件扩展名',
     'settings.file_extensions_show': '显示',
     'settings.file_extensions_hide': '隐藏',
-    'settings.file_menu_styled': '美化菜单',
-    'settings.file_menu_native': '原版菜单',
+    'settings.file_menu_styled': 'Fluent 菜单（带动画）',
+    'settings.file_menu_native': 'Windows 系统菜单',
     'settings.shortcut_extensions': '显示 .lnk 快捷方式扩展名',
     'settings.language': '语言',
+    'settings.startup': '开机自启动',
+    'settings.startup_normal': '登录后启动',
+    'settings.startup_elevated': '登录后以管理员身份启动',
+    'settings.startup_loading': '正在读取…',
+    'settings.startup_unavailable': '无法读取',
+    'settings.startup_hint': '管理员模式需要通过 Windows 权限确认。',
+    'settings.startup_failed': '无法读取或更改自启动设置。请确认 Windows 权限后重试。',
+    'settings.updates': '应用更新',
+    'settings.update_check': '检查更新',
+    'settings.update_checking': '正在检查…',
+    'settings.update_current': '已是最新版本。',
+    'settings.update_available': '下载安装时，DeskChan 会保存布局并退出。',
+    'settings.update_install': '下载并安装',
+    'settings.update_installing': '正在下载并验证…',
+    'settings.update_check_failed': '检查更新失败。请稍后重试。',
+    'settings.update_install_failed': '无法启动更新安装。请重新检查更新后重试。',
     'settings.title': '设置',
     'settings.close': '关闭',
     'settings.tab.general': '通用',

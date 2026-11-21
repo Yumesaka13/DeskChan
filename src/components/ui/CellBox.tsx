@@ -1,773 +1,348 @@
-/**
- * CellBox - a draggable, resizable desktop cell (fence/box) that holds icons.
- * Drag the cell by its title bar or empty area; resize from any edge/corner.
- * Drop external icons onto the cell to add them (to the active tab).
- * Sub-boxes: cells can contain tabbed sub-boxes, rendered as a WinUI-style
- * tab strip right under the title bar; the cell's own icons are the implicit
- * first tab. Double-click the title or a tab to rename it.
- * The title-bar corner button switches the collapse mode (Coodesker style):
- * auto (roll up on leave, expand on hover; up+down carets) vs manual
- * (pinned open; single caret).
- */
-import { createEffect, createSignal, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-import { cn } from '~/lib/utils';
+/** Fluent fence with a title bar, tabs, desktop files and a live geometry preview. */
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import type { Cell } from '@bindings/Cell';
+import type { CellRect } from '@bindings/CellRect';
+import type { DesktopIcon } from '@bindings/DesktopIcon';
+import { FiChevronDown, FiChevronsUp, FiFolder } from 'solid-icons/fi';
 import { useI18n } from '~/i18n';
-import { CELL_TITLEBAR_H } from '~/lib/grid';
-import { activeIcons, totalIconCount } from '~/lib/cell';
-import { snapPosition, snapResizeRect, type ResizeEdges } from '~/lib/snap';
-import { type Cell } from '@bindings/Cell';
-import { type CellRect } from '@bindings/CellRect';
-import { type CellLayout } from '@bindings/CellLayout';
-import { type DesktopIcon as DesktopIconData } from '@bindings/DesktopIcon';
-import { type SubStyle } from '@bindings/SubStyle';
-import { type SortDirection, type SortField } from '~/lib/grid';
-import DesktopIconComponent from './DesktopIcon';
-import ContextMenu, { type MenuItem } from './ContextMenu';
-import { FiCheck, FiPlus, FiTrash2 } from 'solid-icons/fi';
-import { BsCaretDownFill, BsCaretUpFill } from 'solid-icons/bs';
-import { adaptWallpaperTint, pickReadableTextColor } from '~/lib/wallpaper';
 import { useTheme } from '~/lib/theme';
+import { activeIcons, totalIconCount } from '~/lib/cell';
+import { CELL_TITLEBAR_H } from '~/lib/grid';
+import type { Point } from '~/lib/monitor';
+import { cn } from '~/lib/utils';
+import { hexToRgba, wallpaperPalette } from '~/lib/wallpaper';
+import CellMenu, { type CellMenuCommands } from '~/features/cells/CellMenu';
+import CellResizeHandles from '~/features/cells/CellResizeHandles';
+import { createCellGeometry } from '~/features/cells/cell-geometry';
+import { useNativeBackdrop } from '~/platform/NativeBackdrops';
+import DesktopIconView from './DesktopIcon';
+import RenameInput from './RenameInput';
 
-export interface CellBoxProps {
-    /** The cell data */
+interface CellCommands extends CellMenuCommands {
+    setRect: (rect: CellRect) => void;
+    toggleHover: () => void;
+    hover: (hovered: boolean) => void;
+    selectTab: (id: string | null) => void;
+    renameTab: (id: string | null, title: string) => void;
+}
+
+interface IconCommands {
+    open: (icon: DesktopIcon) => void;
+    select: (icon: DesktopIcon, event: MouseEvent) => void;
+    clear: () => void;
+    drag: (icon: DesktopIcon, event: PointerEvent) => void;
+    menu: (icon: DesktopIcon, event: MouseEvent) => void;
+    rename: (icon: DesktopIcon, name: string) => void | Promise<void>;
+    cancelRename: () => void;
+    selected: (id: string) => boolean;
+    editing: (id: string) => boolean;
+}
+
+interface CellBoxProps {
     cell: Cell;
-    /** Called when cell position changes after drag */
-    onMove: (id: string, x: number, y: number) => void;
-    /** Called with the full rect after an edge/corner resize commits */
-    onResize?: (id: string, rect: CellRect) => void;
-    /** Called when an icon is clicked (should open file) */
-    onOpenIcon: (icon: DesktopIconData) => void;
-    /** Called when icons are dropped onto the cell (lands in the active tab) */
-    onDropIcons: (cellId: string, iconPaths: string[]) => void;
-    /** Called when an icon starts being dragged (pointer-event simulated) */
-    onDragStart?: (iconId: string, cellId: string, icon: DesktopIconData, e: PointerEvent) => void;
-    /** Called to toggle hover-expand mode (auto-unroll while hovered) */
-    onToggleHoverExpand: (id: string) => void;
-    /** Called on icon right-click - shows the native shell menu */
-    onIconMenu?: (cellId: string, icon: DesktopIconData, event: MouseEvent) => void;
-    /** Shared desktop-wide icon selection (supports Ctrl selection across cells). */
-    selectedIconIds?: ReadonlySet<string>;
-    onSelectIcon?: (cellId: string, icon: DesktopIconData, event: MouseEvent) => void;
-    onClearIconSelection?: () => void;
-    renamingIconId?: string | null;
-    onRenameIcon?: (icon: DesktopIconData, name: string) => void;
-    onRenameIconCancel?: () => void;
-    showFileExtensions?: boolean;
-    showShortcutExtensions?: boolean;
-    /** Extra white contrast layer applied only within this cell. */
-    desktopOverlayOpacity?: number;
-    /** Wallpaper-derived tint color for cells when tint mode is enabled. */
-    wallpaperTintColor?: string | null;
-    wallpaperTintEnabled?: boolean;
-    /** Called to rename the cell (double-click on the title) */
-    onRename: (id: string, title: string) => void;
-    /** Called to create a new sub-box tab */
-    onCreateSub: (id: string) => void;
-    /** Called to switch the active tab (null = the cell's own icons) */
-    onSelectSub: (id: string, subId: string | null) => void;
-    /** Called to rename a sub-box (double-click on its tab) */
-    onRenameSub: (id: string, subId: string, title: string) => void;
-    /** Called to delete a sub-box (its icons move to the cell's own tab) */
-    onDeleteSub: (id: string, subId: string) => void;
-    /** Called to change how the sub-box tabs size themselves */
-    onSetSubStyle: (id: string, style: SubStyle) => void;
-    /** Change the active cell's icon arrangement. */
-    onSetLayout: (id: string, layout: CellLayout) => void;
-    onArrangeIcons: (id: string, field: SortField, direction: SortDirection) => void;
-    /** Called to toggle this cell's title-bar visibility */
-    onToggleShowTitle: (id: string) => void;
-    /** Live hover state - owned by Desktop so it survives cell re-creation */
-    hovered?: boolean;
-    /** Reports pointer enter/leave; Desktop debounces the leave */
-    onHover?: (id: string, inside: boolean) => void;
-    /** Other cells' screen rects - move/resize magnetically snaps to them */
-    snapRects?: CellRect[];
-    /** Called to delete the cell */
-    onDelete: (id: string) => void;
-    /** Override class for the cell container */
+    hovered: boolean;
+    snapRects: CellRect[];
+    wallpaperTint?: string | null;
+    overlayOpacity: number;
+    showFileExtensions: boolean;
+    showShortcutExtensions: boolean;
+    commands: CellCommands;
+    icons: IconCommands;
+    onSurface?: (fence: HTMLElement) => void;
     class?: string;
-    /** Override class for the title bar */
     titleClass?: string;
-    /** Override class for the icon area */
     contentClass?: string;
 }
 
-/** Inline rename editor - commits on Enter/blur, cancels on Escape. */
-function RenameInput(props: {
-    value: string;
-    onCommit: (value: string) => void;
-    onCancel: () => void;
-    class?: string;
-}) {
-    let ref!: HTMLInputElement;
-    onMount(() => {
-        ref.focus();
-        ref.select();
-    });
-    const commit = () => {
-        const next = ref.value.trim();
-        if (next && next !== props.value) props.onCommit(next);
-        else props.onCancel();
-    };
-    return (
-        <input
-            ref={ref}
-            value={props.value}
-            onBlur={commit}
-            onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === 'Enter') commit();
-                if (e.key === 'Escape') props.onCancel();
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onDblClick={(e) => e.stopPropagation()}
-            class={cn(
-                'bg-transparent rounded px-1 -mx-1 min-w-0',
-                'border border-brand-primary dark:border-brand-secondary outline-none',
-                props.class,
-            )}
-        />
-    );
+interface CellContext {
+    position: Point;
+    tabId?: string;
 }
 
-/**
- * A desktop cell box that contains icons and tabbed sub-boxes. Supports
- * drag-to-move, all-direction resize, drop-to-add-icons, rename-in-place,
- * and a right-click context menu.
- */
+const OWN_TAB = '';
+
 export default function CellBox(props: CellBoxProps) {
     const { t } = useI18n();
+    const backdrop = useNativeBackdrop('acrylic', () => props.cell.opacity > 0);
     const { resolvedTheme } = useTheme();
-    const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number } | null>(null);
-    const [subMenu, setSubMenu] = createSignal<{ x: number; y: number; subId: string } | null>(null);
-    /** Which title is being renamed: the cell itself or a sub-box tab. */
-    const [editing, setEditing] = createSignal<{ subId: string | null } | null>(null);
-    const [isDragging, setIsDragging] = createSignal(false);
-    // Live-resize must bypass the height transition, or the cell lags the cursor
-    const [isResizing, setIsResizing] = createSignal(false);
-    const sortField = () => props.cell.sort_field as SortField;
-    const sortDirection = () => props.cell.sort_direction as SortDirection;
-    const collapsed = () => props.cell.collapsed;
-
-    // Hover-expand (Coodesker's second collapse mode): while the pointer is
-    // over a collapsed cell, temporarily unroll it; roll back shortly after
-    // the pointer leaves. The hover state itself lives in Desktop (keyed by
-    // cell id) so it survives this component being re-created on data change.
-    /** What is actually rendered right now (persisted state + hover).
-     *  An active resize keeps a hover-expanded cell open even if the pointer
-     *  strays outside mid-gesture - otherwise the roll-up would snap the
-     *  geometry out from under the drag. */
-    const displayCollapsed = () =>
-        collapsed() && !(props.cell.hover_expand && (props.hovered === true || isResizing()));
-    /** Title bar follows the per-cell setting while the cell is DISPLAYED
-     *  expanded; a rolled-up cell always shows the bar (it is all there is).
-     *  Keying off displayCollapsed - not the persisted flag - is what lets
-     *  hover-expanded (auto) cells actually hide their title. */
-    const showTitleBar = () => props.cell.show_title || displayCollapsed();
-
-    // Roll-up animation window: the raised layer is held while the height
-    // animates shut, or the still-tall box would pop under its neighbors.
+    const [menu, setMenu] = createSignal<CellContext>();
+    const [editing, setEditing] = createSignal<string>();
     const [rolling, setRolling] = createSignal(false);
-    let rollTimer: ReturnType<typeof setTimeout> | null = null;
-    let wasOpen = !displayCollapsed();
-    createEffect(() => {
-        const open = !displayCollapsed();
-        if (!open && wasOpen) {
-            setRolling(true);
-            if (rollTimer) clearTimeout(rollTimer);
-            rollTimer = setTimeout(() => setRolling(false), 250); // > 200ms anim
-        }
-        wasOpen = open;
+    let tabs!: HTMLDivElement;
+
+    function isCollapsed(): boolean {
+        const cell = props.cell;
+        return cell.collapsed && !(cell.hover_expand && (props.hovered || geometry.mode() === 'resize'));
+    }
+    const geometry = createCellGeometry({
+        rect: () => props.cell.rect,
+        visibleHeight: () => (isCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height),
+        neighbors: () => props.snapRects,
+        commit: (rect) => props.commands.setRect(rect),
+        suspendBackdrop: backdrop.suspend,
+        resumeBackdrop: backdrop.resume,
     });
-    onCleanup(() => { if (rollTimer) clearTimeout(rollTimer); });
+    createEffect(
+        on(
+            isCollapsed,
+            () => {
+                setRolling(true);
+                const timer = setTimeout(() => setRolling(false), 220);
+                onCleanup(() => clearTimeout(timer));
+            },
+            { defer: true },
+        ),
+    );
 
-    let cellRef!: HTMLDivElement;
-    let dragOffset = { x: 0, y: 0 };
-    let dragStartPos = { x: 0, y: 0 };
-
-    // --- Drag to move ---
-    const handleMouseDown = (e: MouseEvent) => {
-        // Only start drag from title bar or empty area (not icons/controls)
-        const target = e.target as HTMLElement;
-        if (target.closest('[data-icon]') || target.closest('button') || target.closest('input') || target.closest('[data-resize]')) return;
-
-        if (target.closest('[data-icon-area]')) {
-            props.onClearIconSelection?.();
-            return;
-        }
-
-        // The title bar sits INSIDE the container, and both bind this same
-        // handler. Without stopping propagation a title-bar mousedown runs
-        // it twice, registering two document-level listener pairs - the
-        // second mouseup then commits the move a second time and pushes a
-        // duplicate history entry (making Ctrl+Z appear dead on the first
-        // press).
-        e.stopPropagation();
-        e.preventDefault();
-        setIsDragging(true);
-
-        dragStartPos = { x: e.clientX, y: e.clientY };
-        dragOffset = {
-            x: e.clientX - props.cell.rect.x,
-            y: e.clientY - props.cell.rect.y,
-        };
-        // What the on-screen box currently measures - snapping must use the
-        // DISPLAYED height so a rolled-up bar butts against neighbors cleanly
-        const snapW = props.cell.rect.width;
-        const snapH = displayCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height;
-        const snapRects = props.snapRects ?? [];
-        let lastPos: { x: number; y: number } | null = null;
-
-        const handleMouseMove = (ev: MouseEvent) => {
-            const dx = ev.clientX - dragStartPos.x;
-            const dy = ev.clientY - dragStartPos.y;
-            // Only start moving after a 3px threshold (distinguish from click)
-            if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
-
-            // Magnetic alignment against the other cells' edges
-            const snapped = snapPosition(
-                ev.clientX - dragOffset.x,
-                ev.clientY - dragOffset.y,
-                snapW,
-                snapH,
-                snapRects,
-            );
-            lastPos = snapped;
-            cellRef.style.left = `${snapped.x}px`;
-            cellRef.style.top = `${snapped.y}px`;
-        };
-
-        const handleMouseUp = () => {
-            setIsDragging(false);
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
-
-            // Commit exactly what the live preview showed (already snapped)
-            if (lastPos && (lastPos.x !== props.cell.rect.x || lastPos.y !== props.cell.rect.y)) {
-                props.onMove(props.cell.id, Math.max(0, lastPos.x), Math.max(0, lastPos.y));
-            }
-        };
-
-        document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', handleMouseUp);
-    };
-
-    // --- Resize from any edge or corner (also while rolled up) ---
-    // Live feedback writes styles directly (like drag-move) and the rect is
-    // committed once on mouseup - going through the config every mousemove
-    // would recreate this component per frame (keyed <For>).
-    const MIN_W = 120;
-    const MIN_H = 80;
-    // A watcher reconcile can recreate this component mid-gesture - the
-    // document listeners must not outlive it.
-    let cancelResize: (() => void) | null = null;
-    onCleanup(() => cancelResize?.());
-    // The curried handler triggers solid/reactivity, but every reactive read
-    // happens at event time (rect snapshotted on mousedown, id on mouseup).
-    // eslint-disable-next-line solid/reactivity
-    const startResize = (dir: ResizeEdges) => (e: PointerEvent) => {
-        if (e.button !== 0) return; // right/middle click must never resize
-        e.stopPropagation();
-        e.preventDefault();
-        setIsResizing(true);
-        // Keep the Rust polling loop from re-ordering the window mid-gesture
-        invoke('set_dragging', { dragging: true }).catch(() => {});
-        const startX = e.clientX;
-        const startY = e.clientY;
-        const r0 = { ...props.cell.rect };
-        const snapRects = props.snapRects ?? [];
-        let last = r0;
-        // The gesture can end OUTSIDE the window (pointer released over the
-        // taskbar); mouseup is then never delivered and `set_dragging` would
-        // stay stuck at true, disabling the Z-order polling loop.
-        let done = false;
-
-        const onMove = (ev: PointerEvent) => {
-            const dx = ev.clientX - startX;
-            const dy = ev.clientY - startY;
-            let { x, y, width, height } = r0;
-            if (dir.e) width = Math.max(MIN_W, r0.width + dx);
-            if (dir.s) height = Math.max(MIN_H, r0.height + dy);
-            // n/w growth is capped at the screen origin so the title bar can
-            // never be dragged (and persisted) off-screen
-            if (dir.w) {
-                width = Math.max(MIN_W, Math.min(r0.width - dx, r0.x + r0.width));
-                x = r0.x + (r0.width - width);
-            }
-            if (dir.n) {
-                height = Math.max(MIN_H, Math.min(r0.height - dy, r0.y + r0.height));
-                y = r0.y + (r0.height - height);
-            }
-            last = snapResizeRect(
-                { x, y, width, height },
-                dir,
-                snapRects,
-                { minWidth: MIN_W, minHeight: MIN_H },
-            );
-            ({ x, y, width, height } = last);
-            cellRef.style.left = `${x}px`;
-            cellRef.style.top = `${y}px`;
-            cellRef.style.width = `${width}px`;
-            if (!displayCollapsed()) cellRef.style.height = `${height}px`;
-        };
-
-        const finish = () => {
-            if (done) return;
-            done = true;
-            cancelResize?.();
-            // Value comparison - `last` is a fresh object after any move, so
-            // an identity check would commit (and push a history entry) even
-            // when nothing actually changed.
-            if (last.x !== r0.x || last.y !== r0.y || last.width !== r0.width || last.height !== r0.height) {
-                props.onResize?.(props.cell.id, last);
-            }
-        };
-        const onUp = () => finish();
-
-        cancelResize = () => {
-            cancelResize = null;
-            setIsResizing(false);
-            invoke('set_dragging', { dragging: false }).catch(() => {});
-            document.removeEventListener('pointermove', onMove);
-            document.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointerleave', finish);
-            window.removeEventListener('lostpointercapture', finish);
-        };
-        document.addEventListener('pointermove', onMove);
-        document.addEventListener('pointerup', onUp);
-        window.addEventListener('pointerleave', finish);
-        window.addEventListener('lostpointercapture', finish);
-    };
-
-    // --- Context menus ---
-    const handleContextMenu = (e: MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setContextMenu({ x: e.clientX, y: e.clientY });
-    };
-
-    const menuItems = (): MenuItem[] => [
-        {
-            label: t('cell.context.new_sub'),
-            icon: <FiPlus />,
-            onClick: () => props.onCreateSub(props.cell.id),
-        },
-        // Tab sizing choice only matters once sub-boxes exist
-        {
-            label: t('cell.context.show_title'),
-            icon: props.cell.show_title ? <FiCheck /> : undefined,
-            onClick: () => props.onToggleShowTitle(props.cell.id),
-        },
-        {
-            label: t('cell.context.arrangement'),
-            submenu: [
-                ...(['Grid', 'List'] as const).map((layout) => ({
-                    label: t(layout === 'Grid' ? 'cell.layout.grid' : 'cell.layout.list'),
-                    icon: props.cell.layout === layout ? <FiCheck /> : undefined,
-                    onClick: () => props.onSetLayout(props.cell.id, layout),
-                })),
-                { separator: true },
-                {
-                    label: t('desktop.context.arrange_auto'),
-                    onClick: () => props.onArrangeIcons(props.cell.id, sortField(), sortDirection()),
-                },
-                {
-                    label: t('desktop.context.sort_by'),
-                    submenu: (['name', 'type', 'modified'] as const).map((field) => ({
-                        label: t(`desktop.context.sort_${field === 'modified' ? 'modified' : field}`),
-                        icon: sortField() === field ? <FiCheck /> : undefined,
-                        onClick: () => props.onArrangeIcons(props.cell.id, field, sortDirection()),
-                    })),
-                },
-                {
-                    label: t('desktop.context.sort_direction'),
-                    submenu: (['asc', 'desc'] as const).map((direction) => ({
-                        label: t(direction === 'asc' ? 'desktop.context.sort_ascending' : 'desktop.context.sort_descending'),
-                        icon: sortDirection() === direction ? <FiCheck /> : undefined,
-                        onClick: () => props.onArrangeIcons(props.cell.id, sortField(), direction),
-                    })),
-                },
-            ],
-        },
-        ...(props.cell.sub_cells.length > 0
-            ? [{
-                  label: t('cell.context.sub_style'),
-                  submenu: (['Compact', 'Stretch'] as const).map((style) => ({
-                      label: t(
-                          style === 'Compact' ? 'cell.sub_style.compact' : 'cell.sub_style.stretch',
-                      ),
-                      // Fluent checkmark in the icon gutter for the active choice
-                      icon: props.cell.sub_style === style ? <FiCheck /> : undefined,
-                      onClick: () => props.onSetSubStyle(props.cell.id, style),
-                  })),
-              }]
-            : []),
-        { separator: true },
-        {
-            label: t('cell.context.delete_cell'),
-            icon: <FiTrash2 />,
-            destructive: true,
-            onClick: () => props.onDelete(props.cell.id),
-        },
-    ];
-
-    const subMenuItems = (subId: string): MenuItem[] => [
-        {
-            label: t('cell.context.delete_sub'),
-            icon: <FiTrash2 />,
-            destructive: true,
-            onClick: () => props.onDeleteSub(props.cell.id, subId),
-        },
-    ];
-
-    // --- Drop icons onto cell (native DOM events for WebView2 compat) ---
-    const handleDragOver = (e: DragEvent) => {
-        e.preventDefault();
-        e.dataTransfer!.dropEffect = 'move';
-    };
-
-    const handleDrop = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // External file drops only (internal icon moves use pointer events)
-        if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-            const paths: string[] = [];
-            for (let i = 0; i < e.dataTransfer.files.length; i++) {
-                // WebView2 exposes the absolute path on the File object
-                const file = e.dataTransfer.files[i] as File & { path?: string };
-                paths.push(file.path ?? file.name);
-            }
-            if (paths.length > 0) {
-                props.onDropIcons(props.cell.id, paths);
-            }
-        }
-    };
-
-    // Register native listeners on mount (bypasses SolidJS event delegation)
-    onMount(() => {
-        cellRef.addEventListener('dragenter', handleDragOver);
-        cellRef.addEventListener('dragover', handleDragOver);
-        cellRef.addEventListener('drop', handleDrop);
-    });
-
-    onCleanup(() => {
-        cellRef.removeEventListener('dragenter', handleDragOver);
-        cellRef.removeEventListener('dragover', handleDragOver);
-        cellRef.removeEventListener('drop', handleDrop);
-    });
-
-    const tintBaseColor = createMemo(() => {
-        if (!props.wallpaperTintEnabled || !props.wallpaperTintColor) return null;
-        return adaptWallpaperTint(props.wallpaperTintColor, resolvedTheme());
-    });
-
-    const tintTextColor = createMemo(() => {
-        if (!tintBaseColor()) return null;
-        return pickReadableTextColor(tintBaseColor()!);
-    });
-    const defaultTextColor = createMemo(() => {
-        if (tintTextColor()) return tintTextColor()!;
-        return resolvedTheme() === 'dark' ? '#e5e7eb' : '#4b5563';
-    });
-
-    // Background style with optional custom color
-    const bgStyle = createMemo(() => {
-        const explicitBg = props.cell.background_color;
-        const wallpaperTint = tintBaseColor();
-        const bg = explicitBg ?? wallpaperTint;
+    const palette = createMemo(() =>
+        props.wallpaperTint && !props.cell.background_color
+            ? wallpaperPalette(props.wallpaperTint, resolvedTheme(), props.overlayOpacity)
+            : undefined,
+    );
+    const cellStyle = () => {
+        const rect = geometry.rect();
+        const tint = palette();
         const opacity = props.cell.opacity;
-        const overlay = Math.max(0, Math.min(props.desktopOverlayOpacity ?? 0, 0.5));
-        const overlayStyle = overlay > 0
-            ? { 'background-image': `linear-gradient(rgba(255, 255, 255, ${overlay}), rgba(255, 255, 255, ${overlay}))` }
-            : {};
-        if (bg) {
-            // Solid style objects take kebab-case CSS property names -
-            // camelCase keys are silently ignored by style.setProperty.
-            return {
-                'background-color': bg,
-                opacity,
-                transition: 'background-color 260ms ease, color 220ms ease, opacity 220ms ease',
-                ...overlayStyle,
-            };
-        }
-        return { opacity, transition: 'background-color 260ms ease, color 220ms ease, opacity 220ms ease', ...overlayStyle };
-    });
+        const color = tint?.surface ?? props.cell.background_color ?? 'var(--fluent-surface)';
+        const tintStrength = Math.min(
+            0.66,
+            (tint || props.cell.background_color ? 0.48 : 0.18) * opacity + props.overlayOpacity * 0.2,
+        );
+        return {
+            left: `${rect.x}px`,
+            top: `${rect.y}px`,
+            width: `${rect.width}px`,
+            height: `${isCollapsed() ? CELL_TITLEBAR_H : rect.height}px`,
+            opacity: opacity === 0 ? 0 : undefined,
+            '--cell-fallback': `color-mix(in srgb, ${color} ${opacity * 100}%, var(--fluent-surface))`,
+            '--cell-acrylic-tint': `color-mix(in srgb, ${color} ${tintStrength * 100}%, transparent)`,
+            '--cell-foreground': tint?.foreground,
+            '--cell-muted': tint?.muted,
+            '--cell-header': tint ? hexToRgba(tint.header, opacity * 0.25) : undefined,
+            '--cell-divider': tint ? hexToRgba(tint.border, opacity * 0.38) : undefined,
+            '--cell-accent': tint?.accent,
+        };
+    };
+    const hasTabs = () => props.cell.sub_cells.length > 0;
+    const currentTab = () => props.cell.active_sub ?? OWN_TAB;
+    const iconList = createMemo(() => activeIcons(props.cell));
+    const iconById = createMemo(() => new Map(iconList().map((icon) => [icon.id, icon])));
+    const tabById = createMemo(() => new Map(props.cell.sub_cells.map((tab) => [tab.id, tab])));
 
-    /** One tab of the strip: the implicit own tab (subId null) or a sub-box.
-     *  Cell rename always lives in the title bar; tabs rename only subs. */
-    const tab = (label: string, subId: string | null) => {
-        const active = () => (props.cell.active_sub ?? null) === subId;
+    function openMenu(event: MouseEvent, tabId?: string) {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu({ position: { x: event.clientX, y: event.clientY }, tabId });
+    }
+
+    function beginMove(event: PointerEvent) {
+        if (event.button !== 0 || !(event.target instanceof Element)) return;
+        if (event.target.closest('button, input, [data-icon], [data-resize]')) return;
+        if (event.target.closest('[data-icon-area]')) props.icons.clear();
+        geometry.start(event);
+    }
+
+    function rename(tab: string, title: string) {
+        props.commands.renameTab(tab || null, title);
+        setEditing(undefined);
+    }
+
+    function tabKey(event: KeyboardEvent) {
+        const items = Array.from(tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+        const index = items.findIndex((item) => item === event.target);
+        if (index === -1) return;
+        const positions: Record<string, number> = {
+            ArrowLeft: (index - 1 + items.length) % items.length,
+            ArrowRight: (index + 1) % items.length,
+            Home: 0,
+            End: items.length - 1,
+        };
+        const next = items[positions[event.key]];
+        if (!next) return;
+        event.preventDefault();
+        event.stopPropagation();
+        next.focus();
+        next.click();
+    }
+
+    function tab(id: string) {
+        const title = () => (id ? (tabById().get(id)?.title ?? '') : props.cell.title);
         return (
             <Show
-                when={!(subId !== null && editing()?.subId === subId)}
+                when={id && editing() === id}
                 fallback={
-                    <RenameInput
-                        value={label}
-                        class="text-xs w-20"
-                        onCommit={(v) => {
-                            if (subId !== null) props.onRenameSub(props.cell.id, subId, v);
-                            setEditing(null);
+                    <button
+                        type="button"
+                        class="cell-tab"
+                        role="tab"
+                        aria-selected={currentTab() === id}
+                        tabIndex={currentTab() === id ? 0 : -1}
+                        onClick={() => props.commands.selectTab(id || null)}
+                        onDblClick={(event) => {
+                            event.stopPropagation();
+                            if (id || props.cell.show_title) setEditing(id);
                         }}
-                        onCancel={() => setEditing(null)}
-                    />
+                        onContextMenu={(event) => {
+                            if (id) openMenu(event, id);
+                        }}
+                    >
+                        {title()}
+                    </button>
                 }
             >
-                <button
-                    onClick={() => props.onSelectSub(props.cell.id, subId)}
-                    onDblClick={(e) => {
-                        e.stopPropagation();
-                        // The cell-rename editor lives in the title bar -
-                        // don't arm it invisibly while the bar is hidden
-                        if (subId === null && !showTitleBar()) return;
-                        setEditing({ subId });
-                    }}
-                    onContextMenu={(e) => {
-                        if (subId === null) return; // the own tab has no menu
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setSubMenu({ x: e.clientX, y: e.clientY, subId });
-                    }}
-                    class={cn(
-                        'relative px-2 py-0.5 rounded text-xs whitespace-nowrap transition-colors',
-                        'hover:bg-black/5 dark:hover:bg-white/8',
-                        // Stretch style: tabs share the row equally
-                        props.cell.sub_style === 'Stretch' && 'flex-1 min-w-0 truncate',
-                        active()
-                            ? 'text-gray-900 dark:text-gray-50 font-semibold'
-                            : 'text-gray-400 dark:text-gray-500',
-                    )}
-                    style={{ color: defaultTextColor() }}
-                >
-                    {label}
-                    <Show when={active()}>
-                        <span class="absolute -bottom-px left-1/2 -translate-x-1/2 w-3 h-[2px] rounded-full bg-brand-primary dark:bg-brand-secondary" />
-                    </Show>
-                </button>
+                <RenameInput
+                    label={t('icon.rename')}
+                    value={title()}
+                    onCommit={(value) => rename(id, value)}
+                    onCancel={() => setEditing(undefined)}
+                    class="cell-tab-input"
+                />
             </Show>
         );
-    };
+    }
 
     return (
         <>
-            <div
-                ref={cellRef}
+            <section
+                ref={(element) => {
+                    backdrop.ref(element);
+                    props.onSurface?.(element);
+                }}
                 data-cell-id={props.cell.id}
                 class={cn(
-                    'glass-panel deskchan-no-select',
-                    'absolute flex flex-col overflow-hidden',
-                    'min-w-[120px]',
-                    !displayCollapsed() && 'min-h-[80px]',
-                    // Layering (all above the free-icon layer): rolled-up
-                    // bars lowest, pinned-open cells above them, and a
-                    // hover-expanded cell on top of everything - held there
-                    // through the roll-up animation to avoid pop-under.
-                    (collapsed() && !displayCollapsed()) || rolling()
-                        ? 'z-40'
-                        : displayCollapsed() ? 'z-10' : 'z-20',
-                    isDragging() && 'cursor-grabbing shadow-2xl',
-                    // Smooth Coodesker-style roll-up/down (height) + shadow.
-                    // Disabled during live resize so the cell tracks the cursor.
-                    !isResizing() && 'cell-height-anim',
+                    'fence deskchan-no-select',
+                    rolling() && !geometry.mode() && 'cell-height-anim',
+                    isCollapsed() ? 'fence-rolled' : 'fence-expanded',
+                    ((props.cell.collapsed && !isCollapsed()) || rolling()) && 'fence-raised',
+                    geometry.mode() === 'move' && 'fence-moving',
+                    geometry.mode() === 'resize' && 'fence-resizing',
                     props.class,
                 )}
-                style={{
-                    left: `${props.cell.rect.x}px`,
-                    top: `${props.cell.rect.y}px`,
-                    width: `${props.cell.rect.width}px`,
-                    height: `${displayCollapsed() ? CELL_TITLEBAR_H : props.cell.rect.height}px`,
-                    ...bgStyle(),
-                }}
-                onMouseDown={handleMouseDown}
-                onContextMenu={handleContextMenu}
-                onMouseEnter={() => props.onHover?.(props.cell.id, true)}
-                onMouseLeave={() => props.onHover?.(props.cell.id, false)}
+                aria-label={props.cell.title}
+                style={cellStyle()}
+                onPointerDown={beginMove}
+                onPointerMove={geometry.move}
+                onPointerUp={geometry.commit}
+                onPointerCancel={geometry.cancel}
+                onLostPointerCapture={geometry.cancel}
+                onMouseEnter={() => props.commands.hover(true)}
+                onMouseLeave={() => props.commands.hover(false)}
+                onContextMenu={(event) => openMenu(event)}
             >
-                {/* Title bar - double-click the title text to rename */}
-                <Show when={showTitleBar()}>
-                    <div
-                        class={cn(
-                            'flex items-center gap-2 px-3',
-                            'text-xs font-medium text-gray-500 dark:text-gray-400',
-                            'cursor-grab flex-shrink-0',
-                            !displayCollapsed() && 'border-b border-gray-200/50 dark:border-gray-600/30',
-                            props.titleClass,
-                        )}
-                        style={{
-                            height: `${CELL_TITLEBAR_H}px`,
-                            color: defaultTextColor(),
-                        }}
-                        onMouseDown={handleMouseDown}
-                    >
+                <Show when={props.cell.show_title || isCollapsed()}>
+                    <header class={cn('fence-titlebar', props.titleClass)}>
+                        <FiFolder size={14} class="fence-mark" aria-hidden="true" />
                         <Show
-                            when={!(editing() && editing()!.subId === null)}
+                            when={editing() === OWN_TAB}
                             fallback={
-                                <RenameInput
-                                    value={props.cell.title}
-                                    class="flex-1 text-xs"
-                                    onCommit={(v) => {
-                                        props.onRename(props.cell.id, v);
-                                        setEditing(null);
+                                <span
+                                    class="fence-title"
+                                    onDblClick={(event) => {
+                                        event.stopPropagation();
+                                        setEditing(OWN_TAB);
                                     }}
-                                    onCancel={() => setEditing(null)}
-                                />
+                                >
+                                    {props.cell.title}
+                                </span>
                             }
                         >
-                            <span
-                                class="flex-1 truncate"
-                                onDblClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditing({ subId: null });
-                                }}
-                            >
-                                {props.cell.title}
-                            </span>
+                            <RenameInput
+                                label={t('icon.rename')}
+                                value={props.cell.title}
+                                onCommit={(value) => rename(OWN_TAB, value)}
+                                onCancel={() => setEditing(undefined)}
+                            />
                         </Show>
-                        {/* Icon count badge - visible when rolled up */}
-                        {displayCollapsed() && (
-                            <span
-                                class="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums"
-                                style={{ color: defaultTextColor() }}
-                            >
-                                {totalIconCount(props.cell)}
-                            </span>
-                        )}
-                        {/* Mode switch (Coodesker style): click toggles auto
-                            (roll up on leave / expand on hover; caret pair)
-                            vs manual (pinned open; single caret). */}
+                        <Show when={isCollapsed()}>
+                            <span class="fence-count">{totalIconCount(props.cell)}</span>
+                        </Show>
                         <button
-                            onClick={(e) => { e.stopPropagation(); props.onToggleHoverExpand(props.cell.id); }}
-                            onDblClick={(e) => e.stopPropagation()}
-                            class={cn(
-                                'fluent-icon-btn flex-shrink-0',
-                                'text-gray-500 dark:text-gray-300',
-                            )}
-                            style={{ color: defaultTextColor() }}
+                            type="button"
+                            class="fluent-icon-btn fence-roll"
+                            aria-label={t('cell.hover_expand')}
+                            aria-pressed={props.cell.hover_expand}
                             title={t('cell.hover_expand')}
+                            onClick={() => props.commands.toggleHover()}
                         >
-                            {props.cell.hover_expand ? (
-                                <span class="flex flex-col -space-y-0.5">
-                                    <BsCaretUpFill class="w-2.5 h-2.5" />
-                                    <BsCaretDownFill class="w-2.5 h-2.5" />
-                                </span>
-                            ) : (
-                                <BsCaretDownFill class="w-3 h-3" />
-                            )}
+                            <Show when={props.cell.hover_expand} fallback={<FiChevronDown size={14} />}>
+                                <FiChevronsUp size={15} />
+                            </Show>
                         </button>
-                    </div>
+                    </header>
                 </Show>
-
-                {/* Sub-box tab strip - the cell's own icons are the first tab */}
-                <Show when={props.cell.sub_cells.length > 0}>
+                <Show when={hasTabs()}>
                     <div
-                        class={cn(
-                            'flex items-center gap-0.5 px-2 py-1 flex-shrink-0',
-                            props.cell.sub_style === 'Compact' && 'flex-wrap',
-                        )}
+                        ref={tabs}
+                        class="fence-tabs"
+                        classList={{ 'fence-tabs-stretch': props.cell.sub_style === 'Stretch' }}
+                        role="tablist"
+                        aria-label={props.cell.title}
+                        onKeyDown={tabKey}
                     >
-                        {tab(props.cell.title, null)}
-                        <For each={props.cell.sub_cells}>{(s) => tab(s.title, s.id)}</For>
+                        {tab(OWN_TAB)}
+                        <For each={props.cell.sub_cells.map((item) => item.id)}>{(id) => tab(id)}</For>
                     </div>
                 </Show>
-
-                {/* Icon area (active tab) - stays mounted while collapsed
-                    (clipped by the animated container height) */}
                 <div
                     data-icon-area
+                    role={hasTabs() ? 'tabpanel' : undefined}
+                    aria-label={
+                        hasTabs() ? (tabById().get(currentTab())?.title ?? props.cell.title) : undefined
+                    }
                     class={cn(
-                        'flex-1 overflow-y-auto p-2 cell-scrollbar',
-                        // Right margin keeps the scrollbar clear of the 6px
-                        // east resize strip, which paints above this area
-                        'mr-1.5',
-                        props.cell.layout === 'Grid'
-                            ? 'flex flex-wrap content-start gap-1'
-                            : 'flex flex-col gap-0.5',
+                        'fence-content cell-scrollbar',
+                        props.cell.layout === 'List' && 'fence-content-list',
                         props.contentClass,
                     )}
                 >
-                    {activeIcons(props.cell).length === 0 ? (
-                        <div
-                            class="flex items-center justify-center h-full text-xs text-gray-400 dark:text-gray-500 italic"
-                            style={tintTextColor() ? { color: tintTextColor()! } : undefined}
-                        >
-                            {t('cell.empty_hint')}
-                        </div>
-                    ) : (
-                        <For each={activeIcons(props.cell)}>
-                            {(icon) => (
-                                <div data-icon data-icon-id={icon.id}>
-                                    <DesktopIconComponent
-                                        icon={icon}
-                                        showFileExtensions={props.showFileExtensions}
-                                        showShortcutExtensions={props.showShortcutExtensions}
-                                        listLayout={props.cell.layout === 'List'}
-                                        class={props.cell.layout === 'List'
-                                            ? 'w-full flex-row justify-start gap-2 px-2 py-1'
-                                            : undefined}
-                                        labelClass={props.cell.layout === 'List'
-                                            ? 'flex-1 max-w-none text-left line-clamp-1'
-                                            : undefined}
-                                        labelStyle={tintTextColor() ? { color: tintTextColor()! } : undefined}
-                                        inputStyle={tintTextColor() ? { color: tintTextColor()! } : undefined}
-                                        selected={props.selectedIconIds?.has(icon.id) ?? false}
-                                        editing={props.renamingIconId === icon.id}
-                                        onSelect={(selected, event) => props.onSelectIcon?.(props.cell.id, selected, event)}
-                                        onOpen={props.onOpenIcon}
-                                        onRename={props.onRenameIcon}
-                                        onRenameCancel={props.onRenameIconCancel}
-                                        onDragStart={props.onDragStart
-                                            ? (iconId, e) => props.onDragStart!(iconId, props.cell.id, icon, e)
-                                            : undefined}
-                                        onNativeMenu={props.onIconMenu
-                                            ? (ic, event) => props.onIconMenu!(props.cell.id, ic, event)
-                                            : undefined}
-                                    />
-                                </div>
-                            )}
+                    <Show
+                        when={iconList().length > 0}
+                        fallback={<p class="fence-empty">{t('cell.empty_hint')}</p>}
+                    >
+                        <For each={iconList().map((icon) => icon.id)}>
+                            {(id) => {
+                                const icon = () => iconById().get(id);
+                                return (
+                                    <Show when={icon()}>
+                                        {(entry) => (
+                                            <div data-icon data-icon-id={id}>
+                                                <DesktopIconView
+                                                    icon={entry()}
+                                                    selected={props.icons.selected(id)}
+                                                    editing={props.icons.editing(id)}
+                                                    listLayout={props.cell.layout === 'List'}
+                                                    showFileExtensions={props.showFileExtensions}
+                                                    showShortcutExtensions={props.showShortcutExtensions}
+                                                    onSelect={props.icons.select}
+                                                    onOpen={props.icons.open}
+                                                    onNativeMenu={props.icons.menu}
+                                                    onDragStart={(_id, event) =>
+                                                        props.icons.drag(entry(), event)
+                                                    }
+                                                    onRename={props.icons.rename}
+                                                    onRenameCancel={props.icons.cancelRename}
+                                                />
+                                            </div>
+                                        )}
+                                    </Show>
+                                );
+                            }}
                         </For>
-                    )}
+                    </Show>
                 </div>
-
-                {/* Resize handles - every edge and corner, invisible strips.
-                    Rolled-up cells expose the horizontal handles full-height
-                    (vertical resize has no visible effect on a 32px bar). */}
-                <Show
-                    when={!displayCollapsed()}
-                    fallback={
-                        <>
-                            <div data-resize class="absolute inset-y-0 left-0 w-1.5 cursor-w-resize" onPointerDown={startResize({ w: true })} />
-                            <div data-resize class="absolute inset-y-0 right-0 w-1.5 cursor-e-resize" onPointerDown={startResize({ e: true })} />
-                        </>
-                    }
-                >
-                    <div data-resize class="absolute inset-x-2.5 top-0 h-1.5 cursor-n-resize" onPointerDown={startResize({ n: true })} />
-                    <div data-resize class="absolute inset-x-2.5 bottom-0 h-1.5 cursor-s-resize" onPointerDown={startResize({ s: true })} />
-                    <div data-resize class="absolute inset-y-2.5 left-0 w-1.5 cursor-w-resize" onPointerDown={startResize({ w: true })} />
-                    <div data-resize class="absolute inset-y-2.5 right-0 w-1.5 cursor-e-resize" onPointerDown={startResize({ e: true })} />
-                    <div data-resize class="absolute left-0 top-0 w-2.5 h-2.5 cursor-nw-resize" onPointerDown={startResize({ n: true, w: true })} />
-                    <div data-resize class="absolute right-0 top-0 w-2.5 h-2.5 cursor-ne-resize" onPointerDown={startResize({ n: true, e: true })} />
-                    <div data-resize class="absolute left-0 bottom-0 w-2.5 h-2.5 cursor-sw-resize" onPointerDown={startResize({ s: true, w: true })} />
-                    <div data-resize class="absolute right-0 bottom-0 w-2.5 h-2.5 cursor-se-resize" onPointerDown={startResize({ s: true, e: true })} />
-                </Show>
-            </div>
-
-            {/* Cell context menu */}
-            {contextMenu() && (
-                <ContextMenu
-                    items={menuItems()}
-                    position={contextMenu()!}
-                    onClose={() => setContextMenu(null)}
-                />
-            )}
-            {/* Sub-box tab context menu */}
-            {subMenu() && (
-                <ContextMenu
-                    items={subMenuItems(subMenu()!.subId)}
-                    position={subMenu()!}
-                    onClose={() => setSubMenu(null)}
-                />
-            )}
+                <CellResizeHandles collapsed={isCollapsed()} start={geometry.start} />
+            </section>
+            <Show when={menu()}>
+                {(m) => (
+                    <CellMenu
+                        cell={props.cell}
+                        position={m().position}
+                        tabId={m().tabId}
+                        commands={props.commands}
+                        onClose={() => setMenu(undefined)}
+                    />
+                )}
+            </Show>
         </>
     );
 }

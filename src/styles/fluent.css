@@ -1,0 +1,483 @@
+/* Shared Fluent controls, overlays, menus, and settings. */
+:where(button, [role='menuitem'], input, select, [role='tab'], [tabindex]):focus-visible {
+    outline: 2px solid var(--fluent-accent);
+    outline-offset: 2px;
+}
+
+.fluent-flyout {
+    background: var(--fluent-flyout);
+    border: 1px solid var(--fluent-divider);
+    border-radius: var(--fluent-radius-surface);
+    color: var(--fluent-text);
+    box-shadow: var(--fluent-shadow-menu);
+}
+.fluent-flyout[data-native-material='acrylic'] {
+    background-color: color-mix(in srgb, var(--fluent-flyout) 22%, transparent);
+}
+
+.fluent-menu-dismiss {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+}
+.fluent-menu {
+    --menu-offset-x: 0px;
+    --menu-offset-y: -8px;
+    position: fixed;
+    z-index: 9999;
+    width: max-content;
+    min-width: 184px;
+    padding: 4px;
+    overflow: auto;
+}
+
+/* The stationary native backing is attached after the menu finishes moving. */
+.fluent-menu[data-opens-to='left'] {
+    --menu-offset-x: 8px;
+    --menu-offset-y: 0px;
+}
+.fluent-menu[data-opens-to='right'] {
+    --menu-offset-x: -8px;
+    --menu-offset-y: 0px;
+}
+.fluent-menu[data-closing] {
+    pointer-events: none;
+}
+.fluent-menu[data-motion='enter'] {
+    animation: fluent-menu-enter var(--fluent-duration-normal) var(--fluent-decelerate-min) both;
+}
+.fluent-menu[data-motion='exit'] {
+    animation: fluent-menu-exit var(--fluent-duration-fast) var(--fluent-accelerate-min) both;
+}
+
+@keyframes fluent-menu-enter {
+    from { opacity: 0; transform: translate(var(--menu-offset-x), var(--menu-offset-y)); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes fluent-menu-exit {
+    from { opacity: var(--menu-exit-opacity, 1); transform: var(--menu-exit-transform, none); }
+    to { opacity: 0; transform: translate(var(--menu-offset-x), var(--menu-offset-y)); }
+}
+
+.desktop-command-menu {
+    min-width: min(208px, calc(100vw - 16px));
+}
+
+.desktop-command-menu .fluent-menu-icon {
+    color: var(--fluent-accent);
+}
+
+.fluent-menu-divider {
+    margin: 4px;
+    border: 0;
+    border-top: 1px solid var(--fluent-divider);
+}
+.fluent-menu-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 32px;
+    padding: 4px 8px;
+    gap: 10px;
+    border-radius: var(--fluent-radius-control);
+    font-size: 14px;
+    text-align: start;
+}
+.fluent-menu-item:hover:not(:disabled),
+.fluent-menu-item[aria-expanded='true'] {
+    background: var(--fluent-hover);
+}
+.fluent-menu-item:focus-visible {
+    outline-offset: -2px;
+}
+.fluent-menu-item:disabled {
+    opacity: 0.5;
+}
+.fluent-menu-icon {
+    display: grid;
+    width: 16px;
+    flex-shrink: 0;
+    place-items: center;
+}
+.fluent-menu-label {
+    flex: 1;
+}
+.fluent-menu-chevron,
+.fluent-menu-shortcut {
+    flex-shrink: 0;
+    color: var(--fluent-subtle);
+}
+.fluent-menu-shortcut {
+    font: inherit;
+    font-size: 12px;
+}
+
+.fluent-btn,
+.fluent-btn-accent,
+.fluent-select {
+    min-height: 32px;
+    border: 1px solid var(--fluent-stroke);
+    border-radius: var(--fluent-radius-control);
+    background: var(--fluent-layer);
+    color: var(--fluent-text);
+    font-size: 14px;
+    line-height: 20px;
+}
+
+.fluent-btn,
+.fluent-btn-accent {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 5px 11px;
+    transition: background var(--fluent-interaction);
+}
+
+.fluent-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--fluent-layer), var(--fluent-text) 6%);
+}
+.fluent-btn:active:not(:disabled) {
+    background: color-mix(in srgb, var(--fluent-layer), var(--fluent-text) 11%);
+}
+.fluent-btn:disabled,
+.fluent-btn-accent:disabled,
+.fluent-select:disabled {
+    opacity: 0.55;
+}
+.fluent-btn-accent {
+    border-color: transparent;
+    background: var(--fluent-accent);
+    color: var(--fluent-on-accent);
+}
+.fluent-btn-accent:hover:not(:disabled) {
+    background: var(--fluent-accent-hover);
+}
+.fluent-select {
+    padding: 3px 9px;
+    max-width: 100%;
+}
+
+.fluent-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    border-radius: var(--fluent-radius-control);
+    width: 28px;
+    height: 28px;
+    transition: background var(--fluent-interaction);
+}
+
+.fluent-icon-btn:hover {
+    background: var(--fluent-hover);
+}
+.fluent-icon-btn:active {
+    background: var(--fluent-pressed);
+}
+
+.fluent-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 20000;
+    background: transparent;
+}
+
+.fluent-dialog {
+    position: fixed;
+    z-index: 20001;
+    display: flex;
+    flex-direction: column;
+    width: 28rem;
+    min-width: 0;
+    overflow: hidden;
+    transform: translate(-50%, -50%);
+    color: var(--fluent-text);
+    background: var(--fluent-surface);
+    border: 1px solid var(--fluent-divider);
+    border-radius: var(--fluent-radius-surface);
+    box-shadow: var(--fluent-shadow-dialog), 0 0 0 100vmax var(--fluent-scrim);
+}
+.fluent-dialog[data-native-material='mica'] {
+    background-color: color-mix(in srgb, var(--fluent-surface) 27%, transparent);
+}
+.fluent-dialog[data-native-material='acrylic'] {
+    background-color: color-mix(in srgb, var(--fluent-surface) 17%, transparent);
+}
+.settings-dialog[data-native-material='acrylic'] .settings-card {
+    background-color: color-mix(in srgb, var(--fluent-layer) 36%, transparent);
+}
+
+.fluent-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--fluent-divider);
+    user-select: none;
+    touch-action: none;
+    cursor: move;
+}
+
+.fluent-dialog-title {
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 600;
+}
+.dialog-close {
+    width: 32px;
+    height: 32px;
+}
+.fluent-dialog-content {
+    min-height: 0;
+    overflow: auto;
+}
+.settings-dialog {
+    width: 46rem;
+}
+.settings-dialog-content {
+    container-type: inline-size;
+}
+.settings-shell {
+    display: grid;
+    grid-template-columns: minmax(128px, 1fr) minmax(0, 3.8fr);
+}
+.settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 8px;
+    border-right: 1px solid var(--fluent-divider);
+}
+
+.settings-nav-item {
+    display: flex;
+    position: relative;
+    min-height: 36px;
+    align-items: center;
+    gap: 10px;
+    border-radius: var(--fluent-radius-control);
+    padding: 6px 10px;
+    text-align: start;
+    font-size: 14px;
+}
+
+.settings-nav-item:hover {
+    background: var(--fluent-hover);
+}
+.settings-nav-item[data-selected] {
+    background: var(--fluent-selected);
+    font-weight: 600;
+}
+.settings-nav-item[data-selected]::before {
+    position: absolute;
+    inset-block: 10px;
+    inset-inline-start: 0;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--fluent-accent);
+    content: '';
+}
+
+.settings-page {
+    min-width: 0;
+    padding: 20px;
+}
+.settings-page:not([data-selected]) {
+    display: none;
+}
+.settings-page-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+.settings-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-block: 20px 8px;
+}
+.settings-card {
+    border: 1px solid var(--fluent-divider);
+    background: var(--fluent-layer);
+    border-radius: var(--fluent-radius-surface);
+}
+.settings-card-spaced {
+    margin-top: 12px;
+}
+
+.settings-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    min-height: 52px;
+    padding: 10px 14px;
+}
+
+.settings-row + .settings-row {
+    border-top: 1px solid var(--fluent-divider);
+}
+.settings-control {
+    flex: 0 1 auto;
+    max-width: 100%;
+}
+.settings-label {
+    display: block;
+    font-size: 14px;
+}
+.settings-description,
+.settings-status,
+.settings-empty {
+    font-size: 12px;
+    color: var(--fluent-subtle);
+    line-height: 18px;
+}
+.settings-description {
+    margin-top: 2px;
+}
+.settings-status {
+    padding: 0 14px 10px;
+}
+.settings-error {
+    color: var(--fluent-danger);
+}
+.settings-empty {
+    padding: 16px 20px;
+}
+.settings-slider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    accent-color: var(--fluent-accent);
+}
+.settings-slider output {
+    min-width: 32px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.fluent-segments {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    border: 1px solid var(--fluent-divider);
+    border-radius: var(--fluent-radius-control);
+    padding: 2px;
+    background: var(--fluent-surface);
+}
+
+.fluent-segments button {
+    padding: 3px 9px;
+    min-height: 28px;
+    border-radius: var(--fluent-radius-control);
+    font-size: 13px;
+}
+
+.fluent-segments button:hover {
+    background: var(--fluent-hover);
+}
+.fluent-segments button[aria-pressed='true'] {
+    background: var(--fluent-accent);
+    color: var(--fluent-on-accent);
+}
+
+.fluent-switch {
+    display: inline-flex;
+    vertical-align: middle;
+}
+.fluent-switch-track {
+    display: inline-flex;
+    align-items: center;
+    width: 40px;
+    height: 20px;
+    padding-inline: 3px;
+    border: 1px solid var(--fluent-stroke);
+    border-radius: 10px;
+    color: var(--fluent-subtle);
+    cursor: pointer;
+}
+.fluent-switch-track[data-checked] {
+    border-color: transparent;
+    background: var(--fluent-accent);
+    color: var(--fluent-on-accent);
+}
+.fluent-switch-input:focus-visible + .fluent-switch-track {
+    outline: 2px solid var(--fluent-accent);
+    outline-offset: 2px;
+}
+.fluent-switch-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: currentColor;
+    transition: transform var(--fluent-interaction);
+}
+.fluent-switch-track[data-checked] .fluent-switch-thumb {
+    transform: translateX(20px);
+}
+
+.history-list {
+    margin: 0;
+    padding: 8px;
+    list-style: none;
+}
+.history-action {
+    display: flex;
+    width: 100%;
+    min-height: 36px;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    border-radius: var(--fluent-radius-control);
+    text-align: start;
+    font-size: 14px;
+}
+.history-action svg {
+    color: var(--fluent-accent);
+    flex-shrink: 0;
+}
+.history-action:hover:not(:disabled) {
+    background: var(--fluent-hover);
+}
+.history-action:disabled {
+    opacity: 0.55;
+}
+
+@container (max-width: 620px) {
+    .settings-shell {
+        grid-template-columns: 1fr;
+    }
+    .settings-nav {
+        flex-direction: row;
+        flex-wrap: wrap;
+        border-right: 0;
+        border-bottom: 1px solid var(--fluent-divider);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fluent-btn,
+    .fluent-icon-btn,
+    .fluent-switch-thumb,
+    .fluent-menu[data-motion],
+    .cell-height-anim {
+        animation: none;
+        transition: none;
+    }
+}
+
+@media (forced-colors: active) {
+    .fluent-dialog, .fluent-dialog[data-native-material],
+    .fence, .fence[data-native-material],
+    .fluent-flyout, .fluent-flyout[data-native-material],
+    .settings-card {
+        background: Canvas;
+        color: CanvasText;
+        border-color: CanvasText;
+    }
+    .fluent-switch-track[data-checked],
+    .fluent-segments button[aria-pressed='true'] {
+        background: Highlight;
+        color: HighlightText;
+    }
+}

@@ -1,37 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import {
-    adaptWallpaperTint,
-    blendWithWhite,
-    hexToRgba,
-    mixHexColors,
-    pickReadableTextColor,
-    softenTint,
-} from './wallpaper';
+import { hexToRgba, mixHexColors, relativeLuminance, wallpaperPalette } from './wallpaper';
 
-describe('wallpaper tint helpers', () => {
-    it('mixes a wallpaper color with white to keep cells readable', () => {
-        expect(mixHexColors('#000000', '#ffffff', 0.5)).toBe('#808080');
-    });
-
+describe('wallpaper tint', () => {
     it('keeps alpha blending predictable for cell backgrounds', () => {
         expect(hexToRgba('#ff0000', 0.5)).toBe('rgba(255, 0, 0, 0.5)');
     });
 
-    it('brightens dark wallpaper tints without overwhelming the cell', () => {
-        expect(blendWithWhite('#1a1a1a', 0.22)).toBe('#4c4c4c');
+    it('keeps foregrounds readable over bright and dark wallpapers at the default opacity', () => {
+        for (const theme of ['light', 'dark'] as const) {
+            for (const wallpaper of ['#000000', '#ffff00', '#ff0000', '#ffffff']) {
+                const palette = wallpaperPalette(wallpaper, theme, 0.01);
+                const surface = mixHexColors(wallpaper, palette.surface, 0.85);
+                const header = mixHexColors(surface, palette.header, 0.85 * 0.22);
+                for (const background of [surface, header]) {
+                    const contrast = [background, palette.foreground]
+                        .map(relativeLuminance)
+                        .sort((a, b) => a - b);
+                    expect((contrast[1] + 0.05) / (contrast[0] + 0.05)).toBeGreaterThan(4.5);
+                }
+            }
+        }
     });
 
-    it('softens dark wallpaper tints for less glare while keeping contrast', () => {
-        expect(softenTint('#1a1a1a')).toBe('#4c4c4c');
-    });
-
-    it('chooses a contrasting foreground color for the wallpaper tint', () => {
-        expect(pickReadableTextColor('#1a1a1a')).toBe('#f8fafc');
-        expect(pickReadableTextColor('#f4f4f4')).toBe('#111827');
-    });
-
-    it('uses darker tinting in dark mode so the UI stays balanced', () => {
-        expect(adaptWallpaperTint('#e8e8e8', 'dark')).toBe('#b1b3b7');
-        expect(adaptWallpaperTint('#1a1a1a', 'dark')).toBe('#16191f');
+    it('keeps the wallpaper hue visible in the header and accent', () => {
+        const warm = wallpaperPalette('#e36738', 'dark', 0.01);
+        const cool = wallpaperPalette('#3867e3', 'dark', 0.01);
+        expect(warm.accent).not.toBe(cool.accent);
+        expect(warm.header).not.toBe(warm.surface);
     });
 });

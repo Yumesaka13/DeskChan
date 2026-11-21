@@ -142,7 +142,7 @@ pub struct DeskConfig {
     /// Absolute paths of icons that must remain free when auto-organizing.
     #[serde(default)]
     pub excluded_from_organize: Vec<String>,
-    /// Use DeskChan's Fluent file context menu instead of the Shell menu.
+    /// Use Fluent context menus on the desktop background and items.
     #[serde(default = "default_true")]
     pub use_styled_file_menu: bool,
     /// Whether file labels include their filename extension.
@@ -224,13 +224,6 @@ pub fn parse_config(path: &std::path::Path) -> Result<DeskConfig, Box<dyn std::e
     }
     let content = std::fs::read_to_string(path)?;
     Ok(toml::from_str(&content)?)
-}
-
-/// Load and validate config from a TOML file path.
-pub fn load_config(path: &std::path::Path) -> Result<DeskConfig, Box<dyn std::error::Error>> {
-    let cfg = parse_config(path)?;
-    validate_config(&cfg).map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-    Ok(cfg)
 }
 
 /// Every filesystem path referenced by a config (icon targets, custom icon

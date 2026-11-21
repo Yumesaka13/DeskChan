@@ -1,202 +1,188 @@
-use std::path::{Path, PathBuf};
-
 #[cfg(target_os = "windows")]
-mod win32 {
-    use std::ffi::c_void;
-    use std::os::windows::ffi::OsStrExt;
+mod windows {
+    use std::ffi::{c_void, OsString};
+    use std::os::windows::ffi::OsStringExt;
     use std::path::PathBuf;
-    use std::ptr;
+    use std::sync::Mutex;
+    use std::time::SystemTime;
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
-    pub type DWORD = u32;
-    pub type HRESULT = i32;
-    pub type HKEY = *mut c_void;
-    pub type LPBYTE = *mut u8;
-    pub type LSTATUS = i32;
-
-    pub const HKEY_CURRENT_USER: HKEY = -2147483647isize as HKEY;
-    pub const KEY_READ: DWORD = 0x20019;
-    pub const SPI_GETDESKWALLPAPER: u32 = 0x0073;
+    type Rgb = [u8; 3];
+    type ImageKey = (PathBuf, SystemTime, u64);
+    static CACHE: Mutex<Option<(ImageKey, Option<Rgb>)>> = Mutex::new(None);
 
     extern "system" {
-        pub fn SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: *mut c_void, fWinIni: u32) -> i32;
-        pub fn RegOpenKeyExW(
-            hKey: HKEY,
-            lpSubKey: *const u16,
-            ulOptions: DWORD,
-            samDesired: DWORD,
-            phkResult: *mut HKEY,
-        ) -> LSTATUS;
-        pub fn RegQueryValueExW(
-            hKey: HKEY,
-            lpValueName: *const u16,
-            lpReserved: *mut DWORD,
-            lpType: *mut DWORD,
-            lpData: LPBYTE,
-            lpcbData: *mut DWORD,
-        ) -> LSTATUS;
-        pub fn RegCloseKey(hKey: HKEY) -> LSTATUS;
-        pub fn DwmGetColorizationColor(pcrColorization: *mut DWORD, pfOpaqueBlend: *mut bool) -> HRESULT;
+        fn SystemParametersInfoW(
+            action: u32,
+            parameter: u32,
+            value: *mut c_void,
+            flags: u32,
+        ) -> i32;
+        fn GetSysColor(index: i32) -> u32;
     }
 
-    pub fn wide(s: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
-    }
-
-    pub fn read_registry_wallpaper() -> Option<String> {
-        let key_name = wide("Control Panel\\Desktop");
-        let mut key: HKEY = ptr::null_mut();
-        let result = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key_name.as_ptr(), 0, KEY_READ, &mut key) };
-        if result != 0 || key.is_null() {
-            return None;
-        }
-
-        let value_name = wide("Wallpaper");
-        let mut value_type: DWORD = 0;
-        let mut value_size: DWORD = 0;
-        let status = unsafe {
-            RegQueryValueExW(
-                key,
-                value_name.as_ptr(),
-                ptr::null_mut(),
-                &mut value_type,
-                ptr::null_mut(),
-                &mut value_size,
+    fn wallpaper_path() -> Option<PathBuf> {
+        const SPI_GETDESKWALLPAPER: u32 = 0x0073;
+        let mut buffer = vec![0u16; 32768];
+        if unsafe {
+            SystemParametersInfoW(
+                SPI_GETDESKWALLPAPER,
+                buffer.len() as u32,
+                buffer.as_mut_ptr().cast(),
+                0,
             )
-        };
-        if status != 0 || value_size == 0 {
-            unsafe { RegCloseKey(key) };
-            return None;
-        }
-
-        let mut raw = vec![0u8; value_size as usize];
-        let query = unsafe {
-            RegQueryValueExW(
-                key,
-                value_name.as_ptr(),
-                ptr::null_mut(),
-                &mut value_type,
-                raw.as_mut_ptr() as LPBYTE,
-                &mut value_size,
-            )
-        };
-        unsafe { RegCloseKey(key) };
-        if query != 0 {
-            return None;
-        }
-
-        let byte_len = raw.iter().position(|&byte| byte == 0).unwrap_or(raw.len()) / 2;
-        let chars = raw[..byte_len * 2]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect::<Vec<_>>();
-        let value = String::from_utf16_lossy(&chars);
-        let path = PathBuf::from(value);
-        if path.is_absolute() && path.exists() {
-            Some(path.to_string_lossy().to_string())
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn current_wallpaper_path() -> Option<String> {
-    let mut buffer = vec![0u16; 260];
-    let result = unsafe {
-        win32::SystemParametersInfoW(
-            win32::SPI_GETDESKWALLPAPER,
-            buffer.len() as u32,
-            buffer.as_mut_ptr().cast(),
-            0,
-        )
-    };
-    if result == 0 {
-        return win32::read_registry_wallpaper();
-    }
-
-    let len = buffer.iter().position(|&item| item == 0).unwrap_or(buffer.len());
-    let path = String::from_utf16_lossy(&buffer[..len]);
-    let path = PathBuf::from(path);
-    if path.is_absolute() && path.exists() {
-        Some(path.to_string_lossy().to_string())
-    } else {
-        win32::read_registry_wallpaper()
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn current_wallpaper_path() -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "windows")]
-fn builtin_wallpaper_color() -> Option<(u8, u8, u8)> {
-    let mut color = 0u32;
-    let mut opaque = false;
-    let hr = unsafe { win32::DwmGetColorizationColor(&mut color, &mut opaque) };
-    if hr != 0 {
-        return None;
-    }
-    let r = ((color >> 16) & 0xFF) as u8;
-    let g = ((color >> 8) & 0xFF) as u8;
-    let b = (color & 0xFF) as u8;
-    Some((r, g, b))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn builtin_wallpaper_color() -> Option<(u8, u8, u8)> {
-    None
-}
-
-#[allow(dead_code)]
-fn average_image_color(path: &Path) -> Option<(u8, u8, u8)> {
-    let image = image::open(path).ok()?;
-    let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    const SAMPLE_STEP: u32 = 4;
-    let mut r: u64 = 0;
-    let mut g: u64 = 0;
-    let mut b: u64 = 0;
-    let mut count: u64 = 0;
-
-    for y in (0..height).step_by(SAMPLE_STEP as usize) {
-        for x in (0..width).step_by(SAMPLE_STEP as usize) {
-            let pixel = rgba.get_pixel(x, y);
-            if pixel[3] == 0 {
-                continue;
+        } != 0
+        {
+            let length = buffer
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(buffer.len());
+            let path = PathBuf::from(OsString::from_wide(&buffer[..length]));
+            if path.is_absolute() && path.is_file() {
+                return Some(path);
             }
-            r += u64::from(pixel[0]);
-            g += u64::from(pixel[1]);
-            b += u64::from(pixel[2]);
-            count += 1;
         }
+        let path: OsString = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Control Panel\Desktop")
+            .ok()?
+            .get_value("Wallpaper")
+            .ok()?;
+        let path = PathBuf::from(path);
+        (path.is_absolute() && path.is_file()).then_some(path)
     }
 
-    if count == 0 {
+    fn image_color(path: PathBuf) -> Option<Rgb> {
+        let metadata = path.metadata().ok()?;
+        let key = (path, metadata.modified().ok()?, metadata.len());
+        let mut cache = CACHE.lock().ok()?;
+        if let Some((previous, color)) = cache.as_ref() {
+            if *previous == key {
+                return *color;
+            }
+        }
+        // Windows also uses extensionless cache files containing JPEG bytes.
+        let sample = (|| {
+            let mut reader = image::ImageReader::open(&key.0)
+                .ok()?
+                .with_guessed_format()
+                .ok()?;
+            let mut limits = image::Limits::default();
+            limits.max_alloc = Some(256 * 1024 * 1024);
+            reader.limits(limits);
+            let image = reader.decode().ok()?.thumbnail(80, 80).into_rgba8();
+            super::representative_color(image.pixels().map(|pixel| pixel.0))
+        })();
+        *cache = Some((key, sample));
+        sample
+    }
+
+    pub fn color() -> Rgb {
+        wallpaper_path().and_then(image_color).unwrap_or_else(|| {
+            const COLOR_BACKGROUND: i32 = 1;
+            let color = unsafe { GetSysColor(COLOR_BACKGROUND) };
+            [color as u8, (color >> 8) as u8, (color >> 16) as u8]
+        })
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn representative_color(pixels: impl Iterator<Item = [u8; 4]>) -> Option<[u8; 3]> {
+    const SECTORS: usize = 24;
+    #[derive(Clone, Copy, Default)]
+    struct Sample {
+        count: u32,
+        rgb: [u32; 3],
+        weight: u32,
+    }
+
+    let mut sectors = [Sample::default(); SECTORS];
+    let mut all = Sample::default();
+    for [r, g, b, alpha] in pixels {
+        if alpha < 128 {
+            continue;
+        }
+        all.count += 1;
+        let rgb = [u32::from(r), u32::from(g), u32::from(b)];
+        for (total, channel) in all.rgb.iter_mut().zip(rgb) {
+            *total += channel;
+        }
+        let max = r.max(g).max(b);
+        let chroma = max - r.min(g).min(b);
+        if chroma < 18 {
+            continue;
+        }
+        let hue = if max == r {
+            f32::from(g) - f32::from(b)
+        } else if max == g {
+            f32::from(b) - f32::from(r) + 2.0 * f32::from(chroma)
+        } else {
+            f32::from(r) - f32::from(g) + 4.0 * f32::from(chroma)
+        } / f32::from(chroma);
+        let index = (hue.rem_euclid(6.0) * (SECTORS as f32 / 6.0)) as usize % SECTORS;
+        let sector = &mut sectors[index];
+        // Cap the weight so small neon details cannot overpower larger,
+        // softer regions of the same or a neighboring hue.
+        let weight = u32::from(chroma.min(96));
+        sector.count += 1;
+        sector.weight += weight;
+        for (total, channel) in sector.rgb.iter_mut().zip(rgb) {
+            *total += channel * weight;
+        }
+    }
+    if all.count == 0 {
         return None;
     }
 
-    Some(((r / count) as u8, (g / count) as u8, (b / count) as u8))
+    let mut dominant = Sample::default();
+    for index in 0..SECTORS {
+        let mut nearby = Sample::default();
+        // Blend neighboring hue bins, including both sides of red's wrap.
+        for offset in [SECTORS - 1, 0, 1] {
+            let sector = sectors[(index + offset) % SECTORS];
+            nearby.count += sector.count;
+            nearby.weight += sector.weight;
+            for (total, channel) in nearby.rgb.iter_mut().zip(sector.rgb) {
+                *total += channel;
+            }
+        }
+        if nearby.count * 8 >= all.count && nearby.weight > dominant.weight {
+            dominant = nearby;
+        }
+    }
+    if dominant.weight > 0 {
+        Some(dominant.rgb.map(|sum| (sum / dominant.weight) as u8))
+    } else {
+        Some(all.rgb.map(|sum| (sum / all.count) as u8))
+    }
 }
 
-#[allow(dead_code)]
-fn rgb_to_hex((r, g, b): (u8, u8, u8)) -> String {
-    format!("#{:02x}{:02x}{:02x}", r, g, b)
-}
-
-#[tauri::command]
 pub fn get_wallpaper_color() -> Result<String, String> {
-    let color = builtin_wallpaper_color().or_else(|| {
-        let path = current_wallpaper_path()?;
-        average_image_color(Path::new(&path))
-    });
+    #[cfg(target_os = "windows")]
+    {
+        let [r, g, b] = windows::color();
+        Ok(format!("#{r:02x}{g:02x}{b:02x}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    Err("wallpaper colors are only supported on Windows".into())
+}
 
-    let Some((r, g, b)) = color else {
-        return Err("wallpaper color unavailable".into());
-    };
-    Ok(rgb_to_hex((r, g, b)))
+#[cfg(test)]
+mod tests {
+    use super::representative_color;
+
+    #[test]
+    fn selects_a_wallpaper_hue_without_averaging_complementary_colors() {
+        let blue = [42, 102, 168, 255];
+        let pixels = [blue; 60].into_iter().chain([[168, 104, 42, 255]; 40]);
+        assert_eq!(representative_color(pixels), Some([42, 102, 168]));
+    }
+
+    #[test]
+    fn ignores_small_neon_details_and_transparent_pixels() {
+        let pixels = [[128, 128, 128, 255]; 99]
+            .into_iter()
+            .chain([[255, 0, 130, 255]])
+            .chain([[255, 0, 130, 0]; 100]);
+        assert_eq!(representative_color(pixels), Some([129, 126, 128]));
+    }
 }

@@ -78,7 +78,7 @@ impl PathAuthorizations {
     }
 }
 
-fn path_key(path: &Path) -> String {
+pub(crate) fn path_key(path: &Path) -> String {
     path.to_string_lossy().to_lowercase()
 }
 

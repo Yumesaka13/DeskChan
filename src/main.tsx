@@ -5,6 +5,9 @@ import App from './App';
 import '@unocss/reset/tailwind.css';
 import 'virtual:uno.css';
 import './styles/global.css';
+import './styles/fluent-tokens.css';
+import './styles/desktop.css';
+import './styles/fluent.css';
 
 const root = document.getElementById('root');
 if (root) {

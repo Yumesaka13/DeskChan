@@ -1,48 +1,75 @@
+//! Typed Tauri command entry points.
+
 use crate::config::{self, DeskConfig, DesktopEntry, DesktopScan};
-use crate::desktop;
-use crate::path_security::{self, PathAuthorizations};
+use crate::desktop::{self, FileOperation};
+use crate::layout_store::{self, LayoutStore};
+use crate::path_security::PathAuthorizations;
+use crate::startup::StartupMode;
 use crate::window_manager::DeskState;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::Manager;
-use tauri_plugin_dialog::DialogExt;
 
-fn config_path(app: &tauri::AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .expect("app data dir")
-        .join("deskchan.toml")
-}
-
-static CONFIG_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
-
-/// Highest configuration write revision the backend has persisted. The
-/// frontend stamps every save with a monotonically increasing revision so a
-/// debounced save that was already in flight cannot clobber a newer
-/// import/reset that landed afterwards.
-static LAST_SAVE_REV: AtomicU64 = AtomicU64::new(0);
+static STARTUP_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
+static INSTALL_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
 
 #[tauri::command]
-pub async fn get_config(app: tauri::AppHandle) -> Result<DeskConfig, String> {
-    let _guard = CONFIG_LOCK.lock().await;
-    config::load_config(&config_path(&app)).map_err(|e| e.to_string())
+pub async fn get_startup_mode() -> Result<StartupMode, String> {
+    tauri::async_runtime::spawn_blocking(crate::startup::get_mode)
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-pub async fn save_config(app: tauri::AppHandle, cfg: DeskConfig, rev: u64) -> Result<(), String> {
-    let _guard = CONFIG_LOCK.lock().await;
-    // A stale write (older revision) must never overwrite a newer one -
-    // otherwise a debounced save already in flight can clobber an
-    // import/reset that landed afterwards.
-    if rev <= LAST_SAVE_REV.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-    config::validate_config(&cfg)?;
-    path_security::validate_config_paths(&cfg)?;
-    config::save_config(&config_path(&app), &cfg).map_err(|e| e.to_string())?;
-    LAST_SAVE_REV.store(rev, Ordering::Relaxed);
-    Ok(())
+pub async fn set_startup_mode(mode: StartupMode) -> Result<(), String> {
+    let _guard = STARTUP_LOCK.lock().await;
+    tauri::async_runtime::spawn_blocking(move || crate::startup::set_mode(mode))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    crate::update::check(&app).await
+}
+
+#[tauri::command]
+pub async fn get_wallpaper_color() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(crate::wallpaper::get_wallpaper_color)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn sync_backdrops(
+    window: tauri::WebviewWindow,
+    surfaces: Vec<crate::materials::BackdropSurface>,
+    dark: bool,
+) -> Result<Vec<u32>, String> {
+    crate::materials::sync(window, surfaces, dark).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    let _guard = INSTALL_LOCK
+        .try_lock()
+        .map_err(|_| "an update is already in progress")?;
+    crate::update::download_and_launch(&app, &version).await
+}
+
+#[tauri::command]
+pub async fn get_config(store: tauri::State<'_, LayoutStore>) -> Result<DeskConfig, String> {
+    Ok(store.snapshot().await)
+}
+
+#[tauri::command]
+pub async fn save_config(
+    store: tauri::State<'_, LayoutStore>,
+    cfg: DeskConfig,
+    rev: u64,
+) -> Result<(), String> {
+    store.save(cfg, rev).await
 }
 
 #[tauri::command]
@@ -56,21 +83,29 @@ pub async fn open_file(
 
 #[tauri::command]
 pub async fn start_native_file_drag(
-    state: tauri::State<'_, Arc<DeskState>>,
+    window: tauri::WebviewWindow,
     authorizations: tauri::State<'_, PathAuthorizations>,
     paths: Vec<String>,
-) -> Result<u32, String> {
-    if paths.is_empty() || paths.len() > 64 {
+) -> Result<Option<u32>, String> {
+    if paths.is_empty() {
         return Err("invalid file selection".into());
     }
     let paths = paths
         .iter()
         .map(|path| authorizations.resolve(path))
         .collect::<Result<Vec<_>, _>>()?;
-    state.dragging.store(true, Ordering::Relaxed);
-    let result = crate::native_drag::drag_files(paths);
-    state.dragging.store(false, Ordering::Relaxed);
-    result
+    tauri::async_runtime::spawn_blocking(move || crate::native_drag::drag_files(window, paths))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn is_desktop_drop_point(
+    window: tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+) -> Result<bool, String> {
+    crate::native_drag::is_desktop_point(&window, x, y)
 }
 
 /// Explorer-like operations used by the styled file menu. Paths are resolved
@@ -156,9 +191,14 @@ pub fn set_dragging(state: tauri::State<'_, Arc<DeskState>>, dragging: bool) {
 pub async fn get_file_icon(
     authorizations: tauri::State<'_, PathAuthorizations>,
     path: String,
+    size_px: u32,
 ) -> Result<String, String> {
     let path = authorizations.resolve(&path)?;
-    crate::window_manager::get_file_icon_base64(&path.to_string_lossy())
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::shell_icons::get_file_icon_base64(&path.to_string_lossy(), size_px)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -166,10 +206,7 @@ pub fn quit_app(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<DeskState>>,
 ) -> Result<(), String> {
-    state.running.store(false, Ordering::Relaxed);
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    #[cfg(target_os = "windows")]
-    crate::window_manager::show_desktop_icons();
+    crate::app::restore_explorer(&state);
     app.exit(0);
     Ok(())
 }
@@ -212,59 +249,39 @@ pub async fn scan_desktop(
 }
 
 #[tauri::command]
-pub async fn reset_config(app: tauri::AppHandle, rev: u64) -> Result<DeskConfig, String> {
-    let _guard = CONFIG_LOCK.lock().await;
-    let cfg = desktop::first_run_config();
-    config::save_config(&config_path(&app), &cfg).map_err(|e| e.to_string())?;
-    LAST_SAVE_REV.fetch_max(rev, Ordering::Relaxed);
-    Ok(cfg)
+pub async fn reset_config(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, LayoutStore>,
+    rev: u64,
+) -> Result<DeskConfig, String> {
+    let cfg = tauri::async_runtime::spawn_blocking(move || layout_store::initial_layout(&app))
+        .await
+        .map_err(|error| error.to_string())?;
+    store.replace(cfg, rev).await
 }
 
 #[tauri::command]
 pub async fn export_config(app: tauri::AppHandle, cfg: DeskConfig) -> Result<bool, String> {
-    config::validate_config(&cfg)?;
-    path_security::validate_config_paths(&cfg)?;
-    let Some(selected) = app
-        .dialog()
-        .file()
-        .add_filter("TOML", &["toml"])
-        .set_file_name("deskchan.toml")
-        .blocking_save_file()
-    else {
-        return Ok(false);
-    };
-    let selected = selected.into_path().map_err(|e| e.to_string())?;
-    let path = path_security::validate_toml_file(&selected.to_string_lossy(), false)?;
-    config::save_config(&path, &cfg).map_err(|e| e.to_string())?;
-    Ok(true)
+    tauri::async_runtime::spawn_blocking(move || layout_store::export(&app, &cfg))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 pub async fn import_config(
     app: tauri::AppHandle,
+    store: tauri::State<'_, LayoutStore>,
     authorizations: tauri::State<'_, PathAuthorizations>,
     rev: u64,
 ) -> Result<Option<DeskConfig>, String> {
-    let Some(selected) = app
-        .dialog()
-        .file()
-        .add_filter("TOML", &["toml"])
-        .blocking_pick_file()
+    let Some(cfg) = tauri::async_runtime::spawn_blocking(move || layout_store::select_import(&app))
+        .await
+        .map_err(|error| error.to_string())??
     else {
         return Ok(None);
     };
-    let selected = selected.into_path().map_err(|e| e.to_string())?;
-    let path = path_security::validate_toml_file(&selected.to_string_lossy(), true)?;
-    let cfg = config::load_config(&path).map_err(|e| e.to_string())?;
-    config::validate_config(&cfg)?;
-    path_security::validate_config_paths(&cfg)?;
-    // Imported icons may point anywhere local - re-authorize them so open /
-    // icon extraction / rename still work after the desktop scan (which only
-    // knows about the desktop folders).
+    let cfg = store.replace(cfg, rev).await?;
     authorizations.authorize(config::config_icon_paths(&cfg));
-    let _guard = CONFIG_LOCK.lock().await;
-    config::save_config(&config_path(&app), &cfg).map_err(|e| e.to_string())?;
-    LAST_SAVE_REV.fetch_max(rev, Ordering::Relaxed);
     Ok(Some(cfg))
 }
 
@@ -366,8 +383,8 @@ pub async fn undo_file_operation(
     // the same gate (resolve_known: the file may not exist yet, e.g. a
     // deleted file being restored). Without this, a compromised renderer
     // could construct a record that moves a desktop file anywhere on disk.
-    match record.kind.as_str() {
-        "move" | "rename" => {
+    match record.kind {
+        FileOperation::Move | FileOperation::Rename => {
             for source in &record.sources {
                 authorizations.resolve_known(source)?;
             }
@@ -375,12 +392,12 @@ pub async fn undo_file_operation(
                 authorizations.resolve(destination)?;
             }
         }
-        "copy" => {
+        FileOperation::Copy => {
             for destination in &record.destinations {
                 authorizations.resolve_known(destination)?;
             }
         }
-        "delete" => {
+        FileOperation::Delete | FileOperation::DeletePermanent => {
             for source in &record.sources {
                 authorizations.resolve_known(source)?;
             }
@@ -388,7 +405,6 @@ pub async fn undo_file_operation(
                 crate::path_security::validate_existing_local_path(backup)?;
             }
         }
-        _ => return Err("unsupported history operation".into()),
     }
     desktop::undo_file_operation(&record)?;
     authorizations.authorize(record.sources.iter().map(PathBuf::from));
@@ -400,8 +416,8 @@ pub async fn redo_file_operation(
     authorizations: tauri::State<'_, PathAuthorizations>,
     record: desktop::FileUndoRecord,
 ) -> Result<(), String> {
-    match record.kind.as_str() {
-        "move" | "rename" | "copy" => {
+    match record.kind {
+        FileOperation::Move | FileOperation::Rename | FileOperation::Copy => {
             for source in &record.sources {
                 authorizations.resolve(source)?;
             }
@@ -410,12 +426,11 @@ pub async fn redo_file_operation(
                 authorizations.resolve_known(destination)?;
             }
         }
-        "delete" => {
+        FileOperation::Delete | FileOperation::DeletePermanent => {
             for source in &record.sources {
                 authorizations.resolve(source)?;
             }
         }
-        _ => return Err("unsupported history operation".into()),
     }
     desktop::redo_file_operation(&record)?;
     authorizations.authorize(record.destinations.iter().map(PathBuf::from));
@@ -471,6 +486,7 @@ pub async fn discard_undo_backups(
 #[tauri::command]
 pub async fn show_icon_menu(
     window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<DeskState>>,
     authorizations: tauri::State<'_, PathAuthorizations>,
     paths: Vec<String>,
     extra_items: Vec<String>,
@@ -493,22 +509,24 @@ pub async fn show_icon_menu(
         .into_iter()
         .map(|path| path.to_string_lossy().to_string())
         .collect();
-    crate::shell_menu::show(window, paths, extra_items)
+    state.with_native_menu(|| crate::shell_menu::show(window, paths, extra_items))
 }
 
 #[tauri::command]
 pub async fn show_desktop_menu(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<DeskState>>,
-) -> Result<(), String> {
-    state
-        .native_desktop_menu_open
-        .store(true, Ordering::Relaxed);
-    let result = crate::shell_menu::show_desktop(window);
-    state
-        .native_desktop_menu_open
-        .store(false, Ordering::Relaxed);
-    result
+    extra_items: Option<Vec<String>>,
+) -> Result<Option<u32>, String> {
+    let extra_items = extra_items.unwrap_or_default();
+    if extra_items.len() > 8
+        || extra_items
+            .iter()
+            .any(|item| item.is_empty() || item.len() > 128 || item.chars().any(char::is_control))
+    {
+        return Err("menu input exceeds limits".into());
+    }
+    state.with_native_menu(|| crate::shell_menu::show_desktop(window, extra_items))
 }
 
 #[tauri::command]

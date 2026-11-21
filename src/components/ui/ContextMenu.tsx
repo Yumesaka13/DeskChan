@@ -1,15 +1,10 @@
-/**
- * ContextMenu - right-click contextual menu in the Windows 11 menu language:
- * Mica surface, inset rounded hover items, a fixed icon gutter so labels
- * align whether or not an item has an icon, hairline group separators, and a
- * thin chevron for submenus (opened on hover).
- * Renders at the cursor position via Portal, closes on backdrop click or Escape.
- */
-import { createEffect, createSignal, For, type JSX } from 'solid-js';
+/** Monitor-aware Fluent menu with keyboard navigation and nested commands. */
+import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack, type JSX } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { FiChevronRight } from 'solid-icons/fi';
-import { getCurrentWindow, monitorFromPoint } from '@tauri-apps/api/window';
+import { viewportBounds, workAreaAt, type Point, type WorkArea } from '~/lib/monitor';
 import { cn } from '~/lib/utils';
+import { useNativeBackdrop } from '~/platform/NativeBackdrops';
 
 export type MenuItem =
     | { separator: true }
@@ -21,175 +16,309 @@ export type MenuItem =
           disabled?: boolean;
           destructive?: boolean;
           onClick?: () => void;
-          /** Nested submenu items (opens on hover) */
           submenu?: MenuItem[];
       };
 
-export interface ContextMenuProps {
+interface ContextMenuProps {
     items: MenuItem[];
-    position: { x: number; y: number };
+    position: Point;
     onClose: () => void;
     class?: string;
+    itemClass?: string;
+}
+
+interface Submenu {
+    items: MenuItem[];
+    trigger: HTMLButtonElement;
+}
+
+const INSET = 8;
+
+function fit(value: number, size: number, start: number, end: number): number {
+    return Math.max(start + INSET, Math.min(end - size - INSET, value));
+}
+
+function waitForMotion(elements: HTMLDivElement[]) {
+    return Promise.allSettled(
+        elements.flatMap((element) => element.getAnimations().map((animation) => animation.finished)),
+    );
 }
 
 export default function ContextMenu(props: ContextMenuProps) {
-    const [subMenus, setSubMenus] = createSignal<Array<{ items: MenuItem[]; x: number; y: number }>>([]);
-    const [mainPosition, setMainPosition] = createSignal(props.position);
-    const [bounds, setBounds] = createSignal({ left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight });
-    let mainRef!: HTMLDivElement;
-
-    const clampY = (y: number, height: number) =>
-        Math.max(bounds().top + 8, Math.min(y, Math.max(bounds().top + 8, bounds().bottom - height - 8)));
-
-    createEffect(() => {
-        const anchor = props.position;
-        void (async () => {
-            try {
-                const appWindow = getCurrentWindow();
-                const [outer, scale] = await Promise.all([appWindow.outerPosition(), appWindow.scaleFactor()]);
-                const monitor = await monitorFromPoint(
-                    outer.x + anchor.x * scale,
-                    outer.y + anchor.y * scale,
-                );
-                if (!monitor) return;
-                // workArea excludes the taskbar (and any dock), unlike the
-                // monitor's full physical bounds. Keep every menu level in
-                // this single monitor's usable area.
-                const workArea = monitor.workArea;
-                const left = (workArea.position.x - outer.x) / scale;
-                const top = (workArea.position.y - outer.y) / scale;
-                setBounds({
-                    left,
-                    top,
-                    right: left + workArea.size.width / scale,
-                    bottom: top + workArea.size.height / scale,
-                });
-            } catch {
-                // Use the virtual viewport fallback when monitor APIs fail.
-            }
-        })();
+    const [bounds, setBounds] = createSignal<WorkArea>(viewportBounds());
+    const [submenus, setSubmenus] = createSignal<Submenu[]>([]);
+    const [closing, setClosing] = createSignal(false);
+    const [exiting, setExiting] = createSignal(false);
+    const panels: { element: HTMLDivElement; suspend: () => Promise<void> | undefined }[] = [];
+    let mounted = true;
+    onCleanup(() => {
+        mounted = false;
     });
 
     createEffect(() => {
-        // Read reactively before queuing DOM measurement so a monitor-bound
-        // update re-runs this effect and repositions the root menu.
-        const currentBounds = bounds();
-        // Recalculate after the panel has its true measured dimensions.
-        queueMicrotask(() => {
-            if (!mainRef) return;
-            const rect = mainRef.getBoundingClientRect();
-            setMainPosition({
-                x: Math.max(currentBounds.left + 8, Math.min(props.position.x, Math.max(currentBounds.left + 8, currentBounds.right - rect.width - 8))),
-                y: Math.max(currentBounds.top + 8, Math.min(props.position.y, Math.max(currentBounds.top + 8, currentBounds.bottom - rect.height - 8))),
-            });
+        const point = props.position;
+        let valid = true;
+        void workAreaAt(point).then((area) => {
+            if (valid) setBounds(area);
+        });
+        onCleanup(() => {
+            valid = false;
         });
     });
 
-    const showSub = (items: MenuItem[], e: MouseEvent, level: number) => {
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // Menu panels have a 9rem minimum width; reserve a little extra for
-        // long translated labels, then flip left if the right edge is tight.
-        const estimatedWidth = 220;
-        const opensRight = rect.right + estimatedWidth <= bounds().right - 8;
-        setSubMenus((current) => [
-            ...current.slice(0, level),
-            {
-                items,
-                x: opensRight ? rect.right : Math.max(bounds().left + 8, rect.left - estimatedWidth),
-                y: clampY(rect.top, 260),
-            },
-        ]);
-    };
-
-    const renderItem = (item: MenuItem, level: number) => {
-        if ('separator' in item && item.separator) {
-            return <div class="h-px mx-2 my-1 bg-black/8 dark:bg-white/10" />;
-        }
-        return (
-            <button
-                role="menuitem"
-                disabled={item.disabled}
-                onClick={() => {
-                    if (!item.disabled && item.onClick) {
-                        item.onClick();
-                        setSubMenus([]);
-                        props.onClose();
-                    }
-                }}
-                onMouseEnter={(e) => {
-                    // A menu can contain another submenu (for example,
-                    // Arrangement > Sort by > Name). Keep ancestor panels,
-                    // and discard only panels below the hovered item.
-                    // Do not collapse a chain when crossing a panel boundary:
-                    // a short pointer transition between adjacent fixed panels
-                    // otherwise made every submenu disappear.
-                    if (item.submenu) showSub(item.submenu, e, level);
-                }}
-                class={cn(
-                    'flex items-center gap-2.5 text-left fluent-menu-item',
-                    level > 0 && 'whitespace-nowrap',
-                    'disabled:opacity-40 disabled:cursor-not-allowed',
-                    item.destructive && 'text-red-500 dark:text-red-400',
-                    item.submenu && 'relative',
-                )}
-            >
-                {/* Fixed icon gutter - labels align with or without an icon */}
-                <span class="w-4 h-4 flex-shrink-0 flex items-center justify-center">
-                    {item.icon}
-                </span>
-                <span class="flex-1">{item.label}</span>
-                {item.shortcut && (
-                    <span class="text-xs text-gray-400 dark:text-gray-500 ml-4">{item.shortcut}</span>
-                )}
-                {item.submenu && (
-                    <FiChevronRight class="w-3.5 h-3.5 ml-2 text-gray-400 dark:text-gray-500" />
-                )}
-            </button>
+    const enabledItems = (level: number) =>
+        Array.from(
+            panels[level]?.element.querySelectorAll<HTMLButtonElement>(
+                'button[role="menuitem"]:not(:disabled)',
+            ) ?? [],
         );
-    };
+    const focusFirst = (level: number) => enabledItems(level)[0]?.focus({ preventScroll: true });
+
+    onMount(() => {
+        const previous = document.activeElement;
+        const menu = panels[0]?.element;
+        focusFirst(0);
+        onCleanup(() => {
+            if (menu?.contains(document.activeElement) || document.activeElement === document.body) {
+                if (previous instanceof HTMLElement && previous.isConnected)
+                    previous.focus({ preventScroll: true });
+            }
+        });
+    });
+
+    function open(items: MenuItem[], trigger: HTMLButtonElement, level: number, focus: boolean) {
+        if (closing()) return;
+        setSubmenus((current) =>
+            current[level]?.trigger === trigger
+                ? current
+                : [...current.slice(0, level), { items, trigger }],
+        );
+        if (focus) queueMicrotask(() => focusFirst(level + 1));
+    }
+
+    function close(action?: () => void) {
+        if (closing()) return;
+        const onClose = props.onClose;
+        const finish = () => {
+            try {
+                action?.();
+            } finally {
+                onClose();
+            }
+        };
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            finish();
+            return;
+        }
+        setClosing(true);
+        const dismiss = async () => {
+            const openPanels = panels.filter(Boolean);
+            await Promise.all(openPanels.map((panel) => panel.suspend()));
+            if (!mounted) return;
+            const elements = openPanels.map((panel) => panel.element);
+            for (const element of elements) {
+                const style = getComputedStyle(element);
+                element.style.setProperty('--menu-exit-opacity', style.opacity);
+                element.style.setProperty('--menu-exit-transform', style.transform);
+            }
+            setExiting(true);
+            await waitForMotion(elements);
+            if (mounted) finish();
+        };
+        void dismiss();
+    }
+
+    function activate(
+        item: Extract<MenuItem, { label: string }>,
+        trigger: HTMLButtonElement,
+        level: number,
+        focus: boolean,
+    ) {
+        if (item.submenu) {
+            open(item.submenu, trigger, level, focus);
+        } else if (item.onClick) {
+            close(item.onClick);
+        }
+    }
+
+    function keyboard(event: KeyboardEvent, level: number) {
+        const items = enabledItems(level);
+        const active = items.findIndex((item) => item === document.activeElement);
+        const current = items[active];
+        function handle(action: () => void) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!closing()) action();
+        }
+        switch (event.key) {
+            case 'ArrowDown':
+                handle(() => items[(active + 1) % items.length]?.focus());
+                break;
+            case 'ArrowUp':
+                handle(() =>
+                    items[
+                        active < 0 ? items.length - 1 : (active - 1 + items.length) % items.length
+                    ]?.focus(),
+                );
+                break;
+            case 'Home':
+                handle(() => items[0]?.focus());
+                break;
+            case 'End':
+                handle(() => items.at(-1)?.focus());
+                break;
+            case 'ArrowRight':
+                if (current?.hasAttribute('aria-haspopup')) handle(() => current.click());
+                break;
+            case 'ArrowLeft':
+                if (level > 0) {
+                    const trigger = submenus()[level - 1]?.trigger;
+                    handle(() => {
+                        setSubmenus((menus) => menus.slice(0, level - 1));
+                        trigger?.focus();
+                    });
+                }
+                break;
+            case 'Escape':
+            case 'Tab':
+                handle(close);
+                break;
+        }
+    }
+
+    function Panel(panel: { level: number; items: MenuItem[]; submenu?: Submenu }) {
+        const [entered, setEntered] = createSignal(false);
+        const backdrop = useNativeBackdrop('acrylic', entered);
+        let ref!: HTMLDivElement;
+        const [position, setPosition] = createSignal<Point & { direction?: 'left' | 'right' }>();
+        onMount(() => {
+            let active = true;
+            void waitForMotion([ref]).then(() => {
+                if (active && !untrack(closing)) setEntered(true);
+            });
+            onCleanup(() => {
+                active = false;
+                if (panels[panel.level]?.element === ref) delete panels[panel.level];
+            });
+        });
+        createEffect(() => {
+            const area = bounds();
+            const initial = props.position;
+            const submenu = panel.submenu;
+            // Updating the command labels can change the panel's width.
+            const items = panel.items;
+            function place() {
+                if (!ref?.isConnected || items.length === 0) return;
+                const { offsetWidth: width, offsetHeight: height } = ref;
+                const trigger = submenu?.trigger.getBoundingClientRect();
+                const direction = trigger
+                    ? trigger.right + width <= area.right - INSET
+                        ? 'right'
+                        : 'left'
+                    : undefined;
+                const x = trigger
+                    ? direction === 'right'
+                        ? trigger.right
+                        : trigger.left - width
+                    : initial.x;
+                const y = trigger?.top ?? initial.y;
+                setPosition({
+                    x: fit(x, width, area.left, area.right),
+                    y: fit(y, height, area.top, area.bottom),
+                    direction,
+                });
+            }
+            queueMicrotask(place);
+        });
+        return (
+            <div
+                ref={(element) => {
+                    ref = element;
+                    panels[panel.level] = { element, suspend: backdrop.suspend };
+                    backdrop.ref(element);
+                }}
+                class={cn('fluent-flyout fluent-menu', props.class)}
+                data-closing={closing() || undefined}
+                data-motion={exiting() ? 'exit' : entered() ? undefined : 'enter'}
+                data-opens-to={position()?.direction}
+                role="menu"
+                style={{
+                    left: `${(position() ?? props.position).x}px`,
+                    top: `${(position() ?? props.position).y}px`,
+                    'max-height': `${Math.max(1, bounds().bottom - bounds().top - INSET * 2)}px`,
+                    'max-width': `${Math.max(1, bounds().right - bounds().left - INSET * 2)}px`,
+                }}
+                onKeyDown={(event) => keyboard(event, panel.level)}
+                onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }}
+            >
+                <div class="fluent-menu-content">
+                    <For each={panel.items}>
+                        {(item) =>
+                            item.separator ? (
+                                <hr role="separator" class="fluent-menu-divider" />
+                            ) : (
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    tabIndex={-1}
+                                    class={cn(
+                                        'fluent-menu-item',
+                                        item.destructive && 'settings-error',
+                                        props.itemClass,
+                                    )}
+                                    disabled={item.disabled}
+                                    aria-haspopup={item.submenu ? 'menu' : undefined}
+                                    aria-expanded={
+                                        item.submenu
+                                            ? submenus()[panel.level]?.items === item.submenu
+                                            : undefined
+                                    }
+                                    onClick={(event) =>
+                                        activate(item, event.currentTarget, panel.level, true)
+                                    }
+                                    onMouseEnter={(event) => {
+                                        if (closing()) return;
+                                        if (item.submenu)
+                                            open(item.submenu, event.currentTarget, panel.level, false);
+                                        else setSubmenus((menus) => menus.slice(0, panel.level));
+                                    }}
+                                >
+                                    <span class="fluent-menu-icon" aria-hidden="true">
+                                        {item.icon}
+                                    </span>
+                                    <span class="fluent-menu-label">{item.label}</span>
+                                    <Show when={item.shortcut}>
+                                        <kbd class="fluent-menu-shortcut">{item.shortcut}</kbd>
+                                    </Show>
+                                    <Show when={item.submenu}>
+                                        <FiChevronRight class="fluent-menu-chevron" aria-hidden="true" />
+                                    </Show>
+                                </button>
+                            )
+                        }
+                    </For>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <Portal>
-            {/* Backdrop - catches all clicks outside to close */}
             <div
-                class="fixed inset-0 z-[9998]"
-                onPointerDown={() => { setSubMenus([]); props.onClose(); }}
-                onContextMenu={(e) => { e.preventDefault(); setSubMenus([]); props.onClose(); }}
-            />
-            {/* Main menu */}
-            <div
-                ref={mainRef}
-                class={cn(
-                    'mica-panel context-menu-enter',
-                    'fixed z-[9999] min-w-44 max-h-[calc(100vh-16px)] overflow-y-auto py-1 px-1',
-                    'text-sm text-gray-800 dark:text-gray-100',
-                    props.class,
-                )}
-                style={{
-                    left: `${mainPosition().x}px`,
-                    top: `${mainPosition().y}px`,
-                    'max-height': `${Math.max(0, bounds().bottom - bounds().top - 16)}px`,
+                class="fluent-menu-dismiss"
+                onPointerDown={() => close()}
+                onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    close();
                 }}
-                role="menu"
-            >
-                {props.items.map((item) => renderItem(item, 0))}
-            </div>
-            {/* Submenus are rendered as a chain, permitting nested choices. */}
-            <For each={subMenus()}>
-                {(menu, index) => (
-                    <div
-                        class={cn('mica-panel context-menu-enter fixed z-[9999] min-w-36 max-h-[calc(100vh-16px)] overflow-y-auto py-1 px-1 text-sm text-gray-800 dark:text-gray-100')}
-                        style={{
-                            left: `${menu.x}px`,
-                            top: `${menu.y}px`,
-                            'max-height': `${Math.max(0, bounds().bottom - bounds().top - 16)}px`,
-                        }}
-                        role="menu"
-                        onPointerDown={(e) => e.stopPropagation()}
-                    >
-                        {menu.items.map((item) => renderItem(item, index() + 1))}
-                    </div>
-                )}
+            />
+            <Panel level={0} items={props.items} />
+            <For each={submenus()}>
+                {(submenu, index) => <Panel level={index() + 1} items={submenu.items} submenu={submenu} />}
             </For>
         </Portal>
     );

@@ -13,7 +13,6 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
         b: value & 255,
     };
 }
-
 export function rgbToHex(r: number, g: number, b: number): string {
     const toHex = (value: number) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0');
     return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
@@ -34,21 +33,22 @@ export function hexToRgba(hex: string, alpha: number): string {
     return `rgba(${r}, ${g}, ${b}, ${Math.min(1, Math.max(0, alpha))})`;
 }
 
-export function blendWithWhite(hex: string, amount = 0.18): string {
-    return mixHexColors(hex, '#ffffff', amount);
-}
-
-export function softenTint(hex: string, amount = 0.22): string {
-    return blendWithWhite(hex, amount);
-}
-
-export function adaptWallpaperTint(hex: string, theme: 'light' | 'dark', amount = 0.22): string {
-    const kind = theme === 'dark' ? '#111827' : '#ffffff';
-    const lightness = relativeLuminance(hex);
-    const ratio = theme === 'dark'
-        ? Math.min(0.42, Math.max(0.18, amount + (1 - lightness) * 0.18))
-        : Math.min(0.32, Math.max(0.12, amount));
-    return mixHexColors(hex, kind, ratio);
+export function wallpaperPalette(seed: string, theme: 'light' | 'dark', overlay: number) {
+    const dark = theme === 'dark';
+    const neutral = dark ? '#14171d' : '#fbfcfe';
+    // Treat the sampled hue as a tint on top of a theme surface. Keeping
+    // most of the neutral prevents bright wallpapers from washing out dark
+    // mode and very dark wallpapers from muddying light mode.
+    const tone = (strength: number) =>
+        mixHexColors(mixHexColors(neutral, seed, strength), '#ffffff', overlay * 0.28);
+    return {
+        surface: tone(dark ? 0.20 : 0.13),
+        header: tone(dark ? 0.30 : 0.22),
+        foreground: dark ? '#f4f6fb' : '#162030',
+        muted: dark ? '#d6dee9' : '#3e4b5d',
+        border: mixHexColors(dark ? '#6b7280' : '#9da8b8', seed, 0.25),
+        accent: mixHexColors(dark ? '#e2e8f0' : '#334155', seed, 0.40),
+    };
 }
 
 export function relativeLuminance(hex: string): number {
@@ -60,8 +60,4 @@ export function relativeLuminance(hex: string): number {
             : ((normalized + 0.055) / 1.055) ** 2.4;
     };
     return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-}
-
-export function pickReadableTextColor(hex: string, lightText = '#f8fafc', darkText = '#111827'): string {
-    return relativeLuminance(hex) > 0.48 ? darkText : lightText;
 }
